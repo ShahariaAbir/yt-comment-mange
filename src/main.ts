@@ -1,73 +1,155 @@
-import { useState, useEffect, useRef, useCallback } from "react";
-import {
-  Youtube, Settings, LogOut, RefreshCw, MessageSquare, Bot,
-  Send, X, ChevronDown, ChevronUp, Search, CheckSquare, Square,
-  Sparkles, Pencil, ThumbsUp, Reply, Filter, SortAsc, Clock,
-  Layers, Zap, Check, AlertCircle, Info, Bell, User, PlaySquare,
-  MoreVertical, Loader2, ChevronRight, Hash, HelpCircle, Star,
-  LayoutList, Inbox
-} from "lucide-react";
+// =========================================
+// YT Comment Manager — Main Application
+// =========================================
+import './style.css';
 
-// ─── Helpers ────────────────────────────────────────────────────────────────
-function timeAgo(dateStr) {
-  if (!dateStr) return "";
-  const secs = Math.floor((Date.now() - new Date(dateStr).getTime()) / 1000);
-  if (secs < 60) return "just now";
-  if (secs < 3600) return `${Math.floor(secs / 60)}m ago`;
-  if (secs < 86400) return `${Math.floor(secs / 3600)}h ago`;
-  if (secs < 2592000) return `${Math.floor(secs / 86400)}d ago`;
-  if (secs < 31536000) return `${Math.floor(secs / 2592000)}mo ago`;
-  return `${Math.floor(secs / 31536000)}y ago`;
+// =========================================
+// State
+// =========================================
+interface AppState {
+  apiKey: string;
+  clientId: string;
+  openrouterKey: string;
+  openrouterModel: string;
+  availableOpenrouterModels: string[];
+  accessToken: string;
+  channelId: string;
+  channelTitle: string;
+  channelAvatar: string;
+  videos: any[];
+  selectedVideoId: string;
+  comments: any[];
+  selectedComments: Set<string>;
+  filter: string;       // 'all' | 'unreplied' | 'replied' | 'questions'
+  sortBy: string;       // 'newest' | 'oldest' | 'likes' | 'replies'
+  searchQuery: string;
+  nextPageToken: string;
+  isLoadingVideos: boolean;
+  isLoadingComments: boolean;
+  replyTone: string;    // 'friendly' | 'professional' | 'casual' | 'funny'
+  customPrompt: string;
+  generatingReplies: Set<string>;
+  replyDrafts: Map<string, string>;
+  openReplyAreas: Set<string>;
+  isSettingsModalOpen: boolean;
 }
 
-function escHtml(str = "") {
-  const d = document.createElement("div");
-  d.textContent = str;
-  return d.innerHTML;
+const state: AppState = {
+  apiKey: localStorage.getItem('yt_api_key') || '',
+  clientId: localStorage.getItem('yt_client_id') || '',
+  openrouterKey: localStorage.getItem('openrouter_key') || '',
+  openrouterModel: localStorage.getItem('openrouter_model') || 'auto',
+  availableOpenrouterModels: [],
+  accessToken: localStorage.getItem('yt_access_token') || '',
+  channelId: localStorage.getItem('yt_channel_id') || '',
+  channelTitle: localStorage.getItem('yt_channel_title') || '',
+  channelAvatar: localStorage.getItem('yt_channel_avatar') || '',
+  videos: [],
+  selectedVideoId: '',
+  comments: [],
+  selectedComments: new Set(),
+  filter: 'all',
+  sortBy: 'newest',
+  searchQuery: '',
+  nextPageToken: '',
+  isLoadingVideos: false,
+  isLoadingComments: false,
+  replyTone: localStorage.getItem('reply_tone') || 'friendly',
+  customPrompt: localStorage.getItem('custom_prompt') || '',
+  generatingReplies: new Set(),
+  replyDrafts: new Map(),
+  openReplyAreas: new Set(),
+  isSettingsModalOpen: false,
+};
+
+const OPENROUTER_FREE_MODEL_PREFERENCES = [
+  'qwen/qwen3-next-80b-a3b-instruct:free',
+  'mistralai/mistral-7b-instruct:free',
+  'google/gemma-2-9b-it:free',
+  'qwen/qwen-2.5-7b-instruct:free',
+];
+
+// =========================================
+// Toast System
+// =========================================
+function showToast(message: string, type: 'success' | 'error' | 'warning' | 'info' = 'info') {
+  let container = document.querySelector('.toast-container');
+  if (!container) {
+    container = document.createElement('div');
+    container.className = 'toast-container';
+    document.body.appendChild(container);
+  }
+  const icons: Record<string, string> = { success: '✅', error: '❌', warning: '⚠️', info: 'ℹ️' };
+  const toast = document.createElement('div');
+  toast.className = `toast ${type}`;
+  toast.innerHTML = `<span>${icons[type]}</span><span>${message}</span>`;
+  container.appendChild(toast);
+  setTimeout(() => {
+    toast.classList.add('removing');
+    setTimeout(() => toast.remove(), 300);
+  }, 4000);
 }
 
-// ─── Toast ──────────────────────────────────────────────────────────────────
-function useToast() {
-  const [toasts, setToasts] = useState([]);
-  const push = useCallback((msg, type = "info") => {
-    const id = Date.now();
-    setToasts(t => [...t, { id, msg, type }]);
-    setTimeout(() => setToasts(t => t.filter(x => x.id !== id)), 4000);
-  }, []);
-  return { toasts, push };
-}
-
-function ToastContainer({ toasts }) {
-  const icons = { success: <Check size={15} />, error: <AlertCircle size={15} />, warning: <Bell size={15} />, info: <Info size={15} /> };
-  const colors = { success: "#22c55e", error: "#ef4444", warning: "#f59e0b", info: "#3b82f6" };
-  return (
-    <div style={{ position: "fixed", bottom: 80, left: "50%", transform: "translateX(-50%)", zIndex: 9999, display: "flex", flexDirection: "column", gap: 8, width: "calc(100% - 32px)", maxWidth: 400 }}>
-      {toasts.map(t => (
-        <div key={t.id} style={{ background: "#1e1e2e", border: `1px solid ${colors[t.type]}40`, borderLeft: `3px solid ${colors[t.type]}`, borderRadius: 12, padding: "10px 14px", display: "flex", alignItems: "center", gap: 10, color: "#fff", fontSize: 13, boxShadow: "0 8px 32px rgba(0,0,0,.5)", animation: "slideUp .25s ease" }}>
-          <span style={{ color: colors[t.type] }}>{icons[t.type]}</span>
-          {t.msg}
-        </div>
-      ))}
-    </div>
-  );
-}
-
-// ─── YouTube OAuth helpers ────────────────────────────────────────────────────
-function getOAuthUrl(clientId) {
+// =========================================
+// YouTube OAuth 2.0
+// =========================================
+function getOAuthUrl() {
   const scopes = [
-    "https://www.googleapis.com/auth/youtube.force-ssl",
-    "https://www.googleapis.com/auth/youtube.readonly",
-  ].join(" ");
+    'https://www.googleapis.com/auth/youtube.force-ssl',
+    'https://www.googleapis.com/auth/youtube.readonly',
+  ];
+  
+  // Clean redirect URI: remove trailing slash if path is just /
   let redirectUri = window.location.origin + window.location.pathname;
-  if (redirectUri.endsWith("/")) redirectUri = redirectUri.slice(0, -1);
-  const p = new URLSearchParams({ client_id: clientId, redirect_uri: redirectUri, response_type: "token", scope: scopes, include_granted_scopes: "true" });
-  return `https://accounts.google.com/o/oauth2/v2/auth?${p}`;
+  if (redirectUri.endsWith('/') && window.location.pathname === '/') {
+    redirectUri = redirectUri.slice(0, -1);
+  }
+
+  const params = new URLSearchParams({
+    client_id: state.clientId,
+    redirect_uri: redirectUri,
+    response_type: 'token',
+    scope: scopes.join(' '),
+    include_granted_scopes: 'true',
+  });
+  return `https://accounts.google.com/o/oauth2/v2/auth?${params.toString()}`;
 }
 
-async function ytFetch(endpoint, accessToken, options = {}) {
-  const url = endpoint.startsWith("http") ? endpoint : `https://www.googleapis.com/youtube/v3${endpoint}`;
-  const headers = { "Content-Type": "application/json", ...(accessToken ? { Authorization: `Bearer ${accessToken}` } : {}), ...options.headers };
+function handleOAuthCallback() {
+  const hash = window.location.hash;
+  if (hash && hash.includes('access_token')) {
+    const params = new URLSearchParams(hash.substring(1));
+    const token = params.get('access_token');
+    if (token) {
+      state.accessToken = token;
+      localStorage.setItem('yt_access_token', token);
+      window.history.replaceState(null, '', window.location.pathname);
+      showToast('Successfully connected to YouTube!', 'success');
+      fetchChannelInfo();
+    }
+  }
+}
+
+// =========================================
+// YouTube API Helpers
+// =========================================
+async function ytApiFetch(endpoint: string, options: RequestInit = {}) {
+  const url = endpoint.startsWith('http') ? endpoint : `https://www.googleapis.com/youtube/v3${endpoint}`;
+  const headers: any = {
+    'Content-Type': 'application/json',
+    ...options.headers,
+  };
+  if (state.accessToken) {
+    headers['Authorization'] = `Bearer ${state.accessToken}`;
+  }
   const res = await fetch(url, { ...options, headers });
+  if (res.status === 401) {
+    state.accessToken = '';
+    localStorage.removeItem('yt_access_token');
+    showToast('Session expired. Please reconnect your YouTube account.', 'warning');
+    render();
+    throw new Error('Unauthorized');
+  }
   if (!res.ok) {
     const err = await res.json().catch(() => ({}));
     throw new Error(err?.error?.message || `API Error ${res.status}`);
@@ -75,713 +157,983 @@ async function ytFetch(endpoint, accessToken, options = {}) {
   return res.json();
 }
 
-// ─── Settings Modal ──────────────────────────────────────────────────────────
-function SettingsModal({ open, onClose, settings, onSave, redirectUri }) {
-  const [form, setForm] = useState(settings);
-  useEffect(() => setForm(settings), [settings]);
-  if (!open) return null;
-  return (
-    <div onClick={e => e.target === e.currentTarget && onClose()} style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,.7)", zIndex: 1000, display: "flex", alignItems: "flex-end", justifyContent: "center" }}>
-      <div style={{ background: "#13131f", borderRadius: "24px 24px 0 0", width: "100%", maxWidth: 480, maxHeight: "92vh", overflowY: "auto", padding: "0 0 40px" }}>
-        {/* Handle */}
-        <div style={{ display: "flex", justifyContent: "center", padding: "12px 0 0" }}>
-          <div style={{ width: 40, height: 4, borderRadius: 2, background: "#333" }} />
-        </div>
-        <div style={{ padding: "16px 20px", display: "flex", justifyContent: "space-between", alignItems: "center", borderBottom: "1px solid #1e1e2e" }}>
-          <h2 style={{ color: "#fff", fontSize: 18, fontWeight: 700 }}>Settings</h2>
-          <button onClick={onClose} style={{ background: "none", border: "none", color: "#888", cursor: "pointer" }}><X size={20} /></button>
-        </div>
-        <div style={{ padding: "20px" }}>
-          {/* Redirect URI */}
-          <div style={{ marginBottom: 20 }}>
-            <label style={lbl}>Authorized Redirect URI</label>
-            <div style={{ background: "#0d0d1a", border: "1px solid #2a2a3e", borderRadius: 10, padding: "10px 14px", fontFamily: "monospace", fontSize: 12, color: "#a78bfa", wordBreak: "break-all" }}>{redirectUri}</div>
-            <p style={hint}>Add this to Google Cloud Console → Authorized Redirect URIs</p>
-          </div>
-          {[
-            { id: "apiKey", label: "YouTube API Key", placeholder: "AIza..." },
-            { id: "clientId", label: "OAuth Client ID", placeholder: "xxxx.apps.googleusercontent.com" },
-            { id: "groqKey", label: "Groq / OpenRouter API Key", placeholder: "gsk_..." },
-          ].map(f => (
-            <div key={f.id} style={{ marginBottom: 16 }}>
-              <label style={lbl}>{f.label}</label>
-              <input type="password" value={form[f.id] || ""} onChange={e => setForm(p => ({ ...p, [f.id]: e.target.value }))} placeholder={f.placeholder} style={inp} />
-            </div>
-          ))}
-          <div style={{ marginBottom: 16 }}>
-            <label style={lbl}>AI Model</label>
-            <select value={form.groqModel || ""} onChange={e => setForm(p => ({ ...p, groqModel: e.target.value }))} style={inp}>
-              {["openai/gpt-oss-20b", "llama-3.3-70b-versatile", "llama-3.1-8b-instant"].map(m => <option key={m}>{m}</option>)}
-            </select>
-          </div>
-          <div style={{ marginBottom: 24 }}>
-            <label style={lbl}>Custom AI Instructions (Optional)</label>
-            <textarea value={form.customPrompt || ""} onChange={e => setForm(p => ({ ...p, customPrompt: e.target.value }))} rows={3} placeholder="e.g. Always mention my channel name..." style={{ ...inp, resize: "vertical" }} />
-          </div>
-          <button onClick={() => onSave(form)} style={primaryBtn}>Save Settings</button>
-        </div>
-      </div>
-    </div>
-  );
+async function fetchChannelInfo() {
+  try {
+    const data = await ytApiFetch('/channels?part=snippet&mine=true');
+    if (data.items?.length) {
+      const ch = data.items[0];
+      state.channelId = ch.id;
+      state.channelTitle = ch.snippet.title;
+      state.channelAvatar = ch.snippet.thumbnails?.default?.url || '';
+      localStorage.setItem('yt_channel_id', state.channelId);
+      localStorage.setItem('yt_channel_title', state.channelTitle);
+      localStorage.setItem('yt_channel_avatar', state.channelAvatar);
+      render();
+      fetchVideos();
+    }
+  } catch (e: any) {
+    showToast('Failed to fetch channel info: ' + e.message, 'error');
+  }
 }
 
-// ─── Shared styles ────────────────────────────────────────────────────────────
-const lbl = { display: "block", color: "#9ca3af", fontSize: 12, fontWeight: 600, textTransform: "uppercase", letterSpacing: ".05em", marginBottom: 6 };
-const hint = { color: "#4b5563", fontSize: 11, marginTop: 4 };
-const inp = { width: "100%", background: "#1a1a2e", border: "1px solid #2a2a3e", borderRadius: 10, padding: "10px 14px", color: "#fff", fontSize: 14, outline: "none", boxSizing: "border-box" };
-const primaryBtn = { width: "100%", background: "linear-gradient(135deg,#7c3aed,#5b21b6)", border: "none", borderRadius: 12, padding: "14px", color: "#fff", fontSize: 15, fontWeight: 700, cursor: "pointer" };
+async function fetchVideos() {
+  if (state.isLoadingVideos) return;
+  state.isLoadingVideos = true;
+  render();
+  try {
+    const data = await ytApiFetch(
+      `/search?part=snippet&channelId=${state.channelId}&type=video&order=date&maxResults=25`
+    );
+    state.videos = data.items || [];
+    state.isLoadingVideos = false;
+    render();
+  } catch (e: any) {
+    state.isLoadingVideos = false;
+    showToast('Failed to load videos: ' + e.message, 'error');
+    render();
+  }
+}
 
-// ─── Comment Card ────────────────────────────────────────────────────────────
-function CommentCard({ comment, onAiReply, onPost, videoTitle }) {
-  const [replyOpen, setReplyOpen] = useState(false);
-  const [draft, setDraft] = useState("");
-  const [generating, setGenerating] = useState(false);
+async function fetchComments(videoId: string, pageToken?: string) {
+  state.isLoadingComments = true;
+  if (!pageToken) {
+    state.comments = [];
+    state.selectedComments = new Set();
+  }
+  render();
+  try {
+    let url = `/commentThreads?part=snippet,replies&videoId=${videoId}&maxResults=50&order=relevance`;
+    if (pageToken) url += `&pageToken=${pageToken}`;
+    const data = await ytApiFetch(url);
+    const newComments = (data.items || []).map((item: any) => {
+      const snippet = item.snippet.topLevelComment.snippet;
+      const hasOwnerReply = item.replies?.comments?.some(
+        (r: any) => r.snippet.authorChannelId?.value === state.channelId
+      ) || false;
+      return {
+        id: item.id,
+        commentId: item.snippet.topLevelComment.id,
+        authorName: snippet.authorDisplayName,
+        authorAvatar: snippet.authorProfileImageUrl,
+        text: snippet.textDisplay,
+        textOriginal: snippet.textOriginal,
+        publishedAt: snippet.publishedAt,
+        likeCount: snippet.likeCount || 0,
+        replyCount: item.snippet.totalReplyCount || 0,
+        hasOwnerReply,
+        ownerReplyText: hasOwnerReply
+          ? item.replies.comments.find(
+              (r: any) => r.snippet.authorChannelId?.value === state.channelId
+            )?.snippet.textOriginal || ''
+          : '',
+      };
+    });
+    state.comments = pageToken ? [...state.comments, ...newComments] : newComments;
+    state.nextPageToken = data.nextPageToken || '';
+    state.isLoadingComments = false;
+    render();
+  } catch (e: any) {
+    state.isLoadingComments = false;
+    showToast('Failed to load comments: ' + e.message, 'error');
+    render();
+  }
+}
 
-  const handleAiGen = async () => {
-    setGenerating(true);
-    setReplyOpen(true);
-    const text = await onAiReply(comment, videoTitle);
-    if (text) setDraft(text);
-    setGenerating(false);
+async function postReply(commentId: string, text: string) {
+  try {
+    await ytApiFetch('/comments?part=snippet', {
+      method: 'POST',
+      body: JSON.stringify({
+        snippet: {
+          parentId: commentId,
+          textOriginal: text,
+        },
+      }),
+    });
+    showToast('Reply posted successfully!', 'success');
+    // Update local state
+    const comment = state.comments.find(c => c.commentId === commentId);
+    if (comment) {
+      comment.hasOwnerReply = true;
+      comment.ownerReplyText = text;
+      comment.replyCount += 1;
+    }
+    state.replyDrafts.delete(commentId);
+    state.openReplyAreas.delete(commentId);
+    render();
+  } catch (e: any) {
+    showToast('Failed to post reply: ' + e.message, 'error');
+  }
+}
+
+// =========================================
+// OpenRouter AI
+// =========================================
+function getOpenrouterModels(): string[] {
+  if (state.availableOpenrouterModels.length > 0) {
+    return state.availableOpenrouterModels;
+  }
+  return OPENROUTER_FREE_MODEL_PREFERENCES;
+}
+
+function resolveOpenrouterModel(): string {
+  const models = getOpenrouterModels();
+
+  if (state.openrouterModel !== 'auto') {
+    return state.openrouterModel;
+  }
+
+  return models[0] || OPENROUTER_FREE_MODEL_PREFERENCES[0];
+}
+
+async function generateReply(commentText: string, videoTitle?: string): Promise<string> {
+  if (!state.openrouterKey) {
+    showToast('Please set your OpenRouter API key in Settings', 'warning');
+    return '';
+  }
+
+  const toneDescriptions: Record<string, string> = {
+    friendly: 'warm, friendly, and appreciative',
+    professional: 'professional, polished, and respectful',
+    casual: 'casual, relaxed, natural, using informal language',
+    funny: 'humorous, witty, with a fun and lighthearted tone',
   };
 
-  return (
-    <div style={{
-      background: "#13131f",
-      border: `1px solid ${comment.hasOwnerReply ? "#16a34a40" : "#1e1e2e"}`,
-      borderRadius: 16,
-      padding: "14px 14px 0",
-      marginBottom: 10,
-      position: "relative",
-    }}>
-      {/* Header */}
-      <div style={{ display: "flex", gap: 10, alignItems: "flex-start" }}>
-        <img src={comment.authorAvatar} alt="" style={{ width: 36, height: 36, borderRadius: "50%", flexShrink: 0, background: "#1e1e2e" }} />
-        <div style={{ flex: 1, minWidth: 0 }}>
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-            <span style={{ color: "#e2e8f0", fontWeight: 600, fontSize: 13 }}>{comment.authorName}</span>
-            <div style={{ display: "flex", gap: 4, alignItems: "center" }}>
-              {comment.hasOwnerReply
-                ? <span style={{ background: "#16a34a20", color: "#4ade80", fontSize: 10, fontWeight: 700, padding: "2px 8px", borderRadius: 20, border: "1px solid #16a34a40" }}>Replied</span>
-                : <span style={{ background: "#92400e20", color: "#fbbf24", fontSize: 10, fontWeight: 700, padding: "2px 8px", borderRadius: 20, border: "1px solid #92400e40" }}>Unreplied</span>}
-              {comment.textOriginal?.includes("?") && <span style={{ background: "#1d4ed820", color: "#60a5fa", fontSize: 10, fontWeight: 700, padding: "2px 8px", borderRadius: 20, border: "1px solid #1d4ed840" }}>?</span>}
-            </div>
-          </div>
-          <div style={{ color: "#6b7280", fontSize: 11, marginTop: 1, display: "flex", alignItems: "center", gap: 4 }}>
-            <Clock size={10} />
-            {timeAgo(comment.publishedAt)}
-            {comment.videoTitle && <><span style={{ color: "#333" }}>·</span><span style={{ color: "#7c3aed", maxWidth: 140, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{comment.videoTitle}</span></>}
-          </div>
-        </div>
-      </div>
+  const tone = toneDescriptions[state.replyTone] || toneDescriptions.friendly;
+  const customInstructions = state.customPrompt ? `
+Additional instructions: ${state.customPrompt}` : '';
+  const selectedModel = resolveOpenrouterModel();
 
-      {/* Body */}
-      <p style={{ color: "#d1d5db", fontSize: 14, lineHeight: 1.6, margin: "10px 0 8px", paddingLeft: 46 }}
-        dangerouslySetInnerHTML={{ __html: comment.text }} />
+  const prompt = `You are a YouTuber replying to a comment on your video${videoTitle ? ` titled "${videoTitle}"` : ''}.
+Write a ${tone} reply to this YouTube comment. Keep it concise (1-3 sentences). Be genuine and engaging. Do not use hashtags. Reply as if you are the creator.${customInstructions}
 
-      {/* Stats */}
-      <div style={{ display: "flex", gap: 14, paddingLeft: 46, marginBottom: 10 }}>
-        <span style={{ color: "#4b5563", fontSize: 12, display: "flex", alignItems: "center", gap: 4 }}><ThumbsUp size={12} />{comment.likeCount}</span>
-        <span style={{ color: "#4b5563", fontSize: 12, display: "flex", alignItems: "center", gap: 4 }}><MessageSquare size={12} />{comment.replyCount}</span>
-      </div>
+Comment: "${commentText}"`;
 
-      {/* Actions */}
-      {!comment.hasOwnerReply && (
-        <div style={{ display: "flex", gap: 8, padding: "10px 0", borderTop: "1px solid #1a1a2e" }}>
-          <button onClick={handleAiGen} disabled={generating} style={{ flex: 1, background: generating ? "#1e1e2e" : "linear-gradient(135deg,#7c3aed,#5b21b6)", border: "none", borderRadius: 10, padding: "9px 0", color: "#fff", fontSize: 13, fontWeight: 600, cursor: generating ? "not-allowed" : "pointer", display: "flex", alignItems: "center", justifyContent: "center", gap: 6 }}>
-            {generating ? <><Loader2 size={14} style={{ animation: "spin 1s linear infinite" }} /> Generating...</> : <><Sparkles size={14} /> AI Reply</>}
-          </button>
-          <button onClick={() => setReplyOpen(o => !o)} style={{ flex: 1, background: "#1a1a2e", border: "1px solid #2a2a3e", borderRadius: 10, padding: "9px 0", color: "#9ca3af", fontSize: 13, fontWeight: 600, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", gap: 6 }}>
-            <Pencil size={14} /> Write
-          </button>
-        </div>
-      )}
+  try {
+    const res = await fetch('https://openrouter.ai/api/v1/chat/completions', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${state.openrouterKey}`,
+        'HTTP-Referer': window.location.origin,
+        'X-Title': 'YT Comment AI Manager',
+      },
+      body: JSON.stringify({
+        model: selectedModel,
+        messages: [
+          { role: 'system', content: 'You write short and natural YouTube creator replies.' },
+          { role: 'user', content: prompt },
+        ],
+        temperature: 0.8,
+        max_tokens: 150,
+      }),
+    });
 
-      {/* Existing reply view */}
-      {comment.hasOwnerReply && (
-        <div>
-          <button onClick={() => setReplyOpen(o => !o)} style={{ width: "100%", background: "none", border: "none", padding: "10px 0", color: "#4ade80", fontSize: 12, cursor: "pointer", display: "flex", alignItems: "center", gap: 6, borderTop: "1px solid #1a1a2e" }}>
-            <Reply size={13} /> {replyOpen ? "Hide reply" : "View your reply"}
-            {replyOpen ? <ChevronUp size={13} /> : <ChevronDown size={13} />}
-          </button>
-          {replyOpen && (
-            <div style={{ background: "#0d0d1a", borderRadius: 10, padding: "12px", marginBottom: 12, borderLeft: "3px solid #4ade80" }}>
-              <p style={{ color: "#d1d5db", fontSize: 13, margin: 0 }}>{comment.ownerReplyText}</p>
-            </div>
-          )}
-        </div>
-      )}
+    if (!res.ok) {
+      const errData = await res.json().catch(() => ({}));
+      throw new Error(errData.error?.message || `OpenRouter API error ${res.status}`);
+    }
 
-      {/* Reply box */}
-      {replyOpen && !comment.hasOwnerReply && (
-        <div style={{ padding: "0 0 12px" }}>
-          <textarea
-            value={draft}
-            onChange={e => setDraft(e.target.value)}
-            placeholder="Type your reply..."
-            rows={3}
-            style={{ ...inp, marginBottom: 8, resize: "vertical", fontSize: 13 }}
-          />
-          <div style={{ display: "flex", gap: 8 }}>
-            <button onClick={() => { setReplyOpen(false); setDraft(""); }} style={{ flex: 1, background: "#1a1a2e", border: "1px solid #2a2a3e", borderRadius: 10, padding: "9px 0", color: "#9ca3af", fontSize: 13, cursor: "pointer" }}>Cancel</button>
-            <button onClick={handleAiGen} disabled={generating} style={{ flex: 1, background: "#1a1a2e", border: "1px solid #7c3aed40", borderRadius: 10, padding: "9px 0", color: "#a78bfa", fontSize: 13, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", gap: 6 }}>
-              {generating ? <Loader2 size={13} style={{ animation: "spin 1s linear infinite" }} /> : <Sparkles size={13} />} Regenerate
-            </button>
-            <button onClick={() => onPost(comment.commentId, draft)} disabled={!draft.trim()} style={{ flex: 1, background: draft.trim() ? "linear-gradient(135deg,#16a34a,#15803d)" : "#1a1a2e", border: "none", borderRadius: 10, padding: "9px 0", color: draft.trim() ? "#fff" : "#4b5563", fontSize: 13, fontWeight: 700, cursor: draft.trim() ? "pointer" : "not-allowed", display: "flex", alignItems: "center", justifyContent: "center", gap: 6 }}>
-              <Send size={13} /> Post
-            </button>
-          </div>
-        </div>
-      )}
-    </div>
-  );
+    const data = await res.json();
+    const reply = data.choices?.[0]?.message?.content?.trim() || '';
+    if (!reply) throw new Error('No reply returned from OpenRouter model');
+    return reply;
+  } catch (e: any) {
+    showToast('OpenRouter AI error: ' + e.message, 'error');
+    return '';
+  }
 }
 
-// ─── Main App ────────────────────────────────────────────────────────────────
-export default function App() {
-  // Persisted settings
-  const [settings, setSettings] = useState(() => ({
-    apiKey: localStorage.getItem("yt_api_key") || "",
-    clientId: localStorage.getItem("yt_client_id") || "",
-    groqKey: localStorage.getItem("groq_key") || "",
-    groqModel: localStorage.getItem("groq_model") || "openai/gpt-oss-20b",
-    customPrompt: localStorage.getItem("custom_prompt") || "",
-  }));
+async function generateSingleReply(commentId: string) {
+  const comment = state.comments.find(c => c.commentId === commentId);
+  if (!comment) return;
 
-  const [accessToken, setAccessToken] = useState(() => localStorage.getItem("yt_access_token") || "");
-  const [channel, setChannel] = useState(() => ({
-    id: localStorage.getItem("yt_channel_id") || "",
-    title: localStorage.getItem("yt_channel_title") || "",
-    avatar: localStorage.getItem("yt_channel_avatar") || "",
-  }));
+  state.generatingReplies.add(commentId);
+  state.openReplyAreas.add(commentId);
+  render();
 
-  const [videos, setVideos] = useState([]);
-  const [selectedVideoId, setSelectedVideoId] = useState("");
-  const [allComments, setAllComments] = useState([]); // all comments across videos with videoTitle
-  const [filter, setFilter] = useState("all");
-  const [sortBy, setSortBy] = useState("newest");
-  const [searchQuery, setSearchQuery] = useState("");
-  const [replyTone, setReplyTone] = useState(() => localStorage.getItem("reply_tone") || "friendly");
-  const [selectedIds, setSelectedIds] = useState(new Set());
-  const [batchGenerating, setBatchGenerating] = useState(false);
-  const [loadingVideos, setLoadingVideos] = useState(false);
-  const [loadingComments, setLoadingComments] = useState(false);
-  const [settingsOpen, setSettingsOpen] = useState(false);
-  const [activeTab, setActiveTab] = useState("all"); // "all" | "videos"
-  const { toasts, push: toast } = useToast();
+  const videoTitle = state.videos.find(v => v.id?.videoId === state.selectedVideoId)?.snippet?.title || '';
+  const reply = await generateReply(comment.textOriginal, videoTitle);
 
-  const redirectUri = (window.location.origin + window.location.pathname).replace(/\/$/, "");
+  state.generatingReplies.delete(commentId);
+  if (reply) {
+    state.replyDrafts.set(commentId, reply);
+  }
+  render();
+}
 
-  // ── OAuth callback ──────────────────────────────────────────────────────────
-  useEffect(() => {
-    const hash = window.location.hash;
-    if (hash && hash.includes("access_token")) {
-      const p = new URLSearchParams(hash.substring(1));
-      const token = p.get("access_token");
-      if (token) {
-        setAccessToken(token);
-        localStorage.setItem("yt_access_token", token);
-        window.history.replaceState(null, "", window.location.pathname);
-        toast("Connected to YouTube!", "success");
-      }
-    }
-  }, []);
+async function batchGenerateAndReply() {
+  if (state.selectedComments.size === 0) return;
 
-  // ── On token + channelId present, load videos ───────────────────────────────
-  useEffect(() => {
-    if (!accessToken) return;
-    if (!channel.id) {
-      fetchChannelInfo(accessToken);
-    } else {
-      fetchVideos(accessToken, channel.id);
-    }
-  }, [accessToken]);
+  const unreplied = [...state.selectedComments].filter(id => {
+    const c = state.comments.find(cm => cm.commentId === id);
+    return c && !c.hasOwnerReply;
+  });
 
-  async function fetchChannelInfo(token) {
-    try {
-      const data = await ytFetch("/channels?part=snippet&mine=true", token);
-      if (data.items?.length) {
-        const ch = data.items[0];
-        const c = { id: ch.id, title: ch.snippet.title, avatar: ch.snippet.thumbnails?.default?.url || "" };
-        setChannel(c);
-        localStorage.setItem("yt_channel_id", c.id);
-        localStorage.setItem("yt_channel_title", c.title);
-        localStorage.setItem("yt_channel_avatar", c.avatar);
-        fetchVideos(token, c.id);
-      }
-    } catch (e) { toast("Failed to fetch channel: " + e.message, "error"); }
+  if (unreplied.length === 0) {
+    showToast('All selected comments already have replies', 'info');
+    return;
   }
 
-  async function fetchVideos(token, channelId) {
-    setLoadingVideos(true);
-    try {
-      const data = await ytFetch(`/search?part=snippet&channelId=${channelId}&type=video&order=date&maxResults=25`, token);
-      setVideos(data.items || []);
-    } catch (e) { toast("Failed to load videos: " + e.message, "error"); }
-    setLoadingVideos(false);
-  }
+  showToast(`Generating AI replies for ${unreplied.length} comments...`, 'info');
 
-  // ── Load ALL comments across all videos ─────────────────────────────────────
-  async function loadAllComments() {
-    if (!accessToken || videos.length === 0) return;
-    setLoadingComments(true);
-    setAllComments([]);
-    toast(`Loading comments from ${videos.length} videos...`, "info");
+  const videoTitle = state.videos.find(v => v.id?.videoId === state.selectedVideoId)?.snippet?.title || '';
 
-    const result = [];
-    for (const v of videos) {
-      const videoId = v.id?.videoId;
-      if (!videoId) continue;
+  for (const commentId of unreplied) {
+    const comment = state.comments.find(c => c.commentId === commentId);
+    if (!comment) continue;
+
+    state.generatingReplies.add(commentId);
+    render();
+
+    const reply = await generateReply(comment.textOriginal, videoTitle);
+
+    state.generatingReplies.delete(commentId);
+
+    if (reply) {
       try {
-        const data = await ytFetch(`/commentThreads?part=snippet,replies&videoId=${videoId}&maxResults=50&order=relevance`, accessToken);
-        const comments = (data.items || []).map(item => {
-          const sn = item.snippet.topLevelComment.snippet;
-          const hasOwnerReply = item.replies?.comments?.some(r => r.snippet.authorChannelId?.value === channel.id) || false;
-          return {
-            id: item.id,
-            commentId: item.snippet.topLevelComment.id,
-            videoId,
-            videoTitle: v.snippet?.title || "Untitled",
-            authorName: sn.authorDisplayName,
-            authorAvatar: sn.authorProfileImageUrl,
-            text: sn.textDisplay,
-            textOriginal: sn.textOriginal,
-            publishedAt: sn.publishedAt,
-            likeCount: sn.likeCount || 0,
-            replyCount: item.snippet.totalReplyCount || 0,
-            hasOwnerReply,
-            ownerReplyText: hasOwnerReply ? item.replies.comments.find(r => r.snippet.authorChannelId?.value === channel.id)?.snippet.textOriginal || "" : "",
-          };
-        });
-        result.push(...comments);
-      } catch (_) { /* skip video if error */ }
-    }
-
-    // Sort by time (newest first)
-    result.sort((a, b) => new Date(b.publishedAt) - new Date(a.publishedAt));
-    setAllComments(result);
-    setLoadingComments(false);
-    toast(`Loaded ${result.length} comments from ${videos.length} videos`, "success");
-  }
-
-  // Auto-load comments when videos tab changes
-  useEffect(() => {
-    if (accessToken && videos.length > 0 && allComments.length === 0) {
-      loadAllComments();
-    }
-  }, [videos]);
-
-  // ── Fetch single video comments ─────────────────────────────────────────────
-  async function fetchVideoComments(videoId) {
-    if (!accessToken) return;
-    setLoadingComments(true);
-    try {
-      const data = await ytFetch(`/commentThreads?part=snippet,replies&videoId=${videoId}&maxResults=50&order=relevance`, accessToken);
-      const comments = (data.items || []).map(item => {
-        const sn = item.snippet.topLevelComment.snippet;
-        const hasOwnerReply = item.replies?.comments?.some(r => r.snippet.authorChannelId?.value === channel.id) || false;
-        const vData = videos.find(v => v.id?.videoId === videoId);
-        return {
-          id: item.id,
-          commentId: item.snippet.topLevelComment.id,
-          videoId,
-          videoTitle: vData?.snippet?.title || "",
-          authorName: sn.authorDisplayName,
-          authorAvatar: sn.authorProfileImageUrl,
-          text: sn.textDisplay,
-          textOriginal: sn.textOriginal,
-          publishedAt: sn.publishedAt,
-          likeCount: sn.likeCount || 0,
-          replyCount: item.snippet.totalReplyCount || 0,
-          hasOwnerReply,
-          ownerReplyText: hasOwnerReply ? item.replies.comments.find(r => r.snippet.authorChannelId?.value === channel.id)?.snippet.textOriginal || "" : "",
-        };
-      });
-      // Merge into allComments (replace for that videoId)
-      setAllComments(prev => {
-        const others = prev.filter(c => c.videoId !== videoId);
-        return [...others, ...comments].sort((a, b) => new Date(b.publishedAt) - new Date(a.publishedAt));
-      });
-    } catch (e) { toast("Failed to load comments: " + e.message, "error"); }
-    setLoadingComments(false);
-  }
-
-  // ── AI reply (single) ────────────────────────────────────────────────────────
-  async function generateReply(comment, videoTitle) {
-    if (!settings.groqKey) { toast("Set Groq API key in Settings", "warning"); return ""; }
-    const tones = { friendly: "warm, friendly, appreciative", professional: "professional, polished, respectful", casual: "casual, relaxed, informal", funny: "humorous, witty, lighthearted" };
-    const tone = tones[replyTone] || tones.friendly;
-    const extra = settings.customPrompt ? `\nExtra: ${settings.customPrompt}` : "";
-    const prompt = `You are a YouTuber replying to a comment on your video${videoTitle ? ` "${videoTitle}"` : ""}. Write a ${tone} reply (1-3 sentences, genuine, no hashtags).${extra}\n\nComment: "${comment.textOriginal}"`;
-    try {
-      const res = await fetch("https://api.groq.com/openai/v1/chat/completions", {
-        method: "POST",
-        headers: { "Content-Type": "application/json", Authorization: `Bearer ${settings.groqKey}` },
-        body: JSON.stringify({ model: settings.groqModel, messages: [{ role: "user", content: prompt }], temperature: 0.8, max_tokens: 150 }),
-      });
-      if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error?.message || "Groq error");
-      const data = await res.json();
-      return data.choices?.[0]?.message?.content?.trim() || "";
-    } catch (e) { toast("AI error: " + e.message, "error"); return ""; }
-  }
-
-  // ── Batch AI generate ALL selected as single JSON call ───────────────────────
-  async function batchGenerateAll() {
-    const unreplied = [...selectedIds].filter(id => {
-      const c = allComments.find(cm => cm.commentId === id);
-      return c && !c.hasOwnerReply;
-    });
-    if (unreplied.length === 0) { toast("No unreplied comments selected", "info"); return; }
-    if (!settings.groqKey) { toast("Set Groq API key in Settings", "warning"); return; }
-
-    setBatchGenerating(true);
-    toast(`Generating ${unreplied.length} replies in batch...`, "info");
-
-    // Build single JSON payload with all comments
-    const tones = { friendly: "warm, friendly, appreciative", professional: "professional, polished, respectful", casual: "casual, relaxed, informal", funny: "humorous, witty, lighthearted" };
-    const tone = tones[replyTone] || tones.friendly;
-    const extra = settings.customPrompt ? `\nExtra instructions: ${settings.customPrompt}` : "";
-
-    const commentsForAI = unreplied.map(id => {
-      const c = allComments.find(cm => cm.commentId === id);
-      return { id: c.commentId, videoTitle: c.videoTitle || "", comment: c.textOriginal };
-    });
-
-    const prompt = `You are a YouTuber. Reply to each comment with a ${tone} response (1-3 sentences, no hashtags, genuine).${extra}
-
-Return ONLY a valid JSON array like: [{"id":"<comment_id>","reply":"<your reply>"},...]
-
-Comments JSON:
-${JSON.stringify(commentsForAI, null, 2)}`;
-
-    try {
-      const res = await fetch("https://api.groq.com/openai/v1/chat/completions", {
-        method: "POST",
-        headers: { "Content-Type": "application/json", Authorization: `Bearer ${settings.groqKey}` },
-        body: JSON.stringify({ model: settings.groqModel, messages: [{ role: "user", content: prompt }], temperature: 0.8, max_tokens: 2000 }),
-      });
-      if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error?.message || "Groq error");
-      const data = await res.json();
-      let raw = data.choices?.[0]?.message?.content?.trim() || "[]";
-      raw = raw.replace(/```json|```/g, "").trim();
-      const replies = JSON.parse(raw);
-
-      // Post all replies
-      let posted = 0;
-      for (const r of replies) {
-        if (!r.id || !r.reply) continue;
-        try {
-          await ytFetch("/comments?part=snippet", accessToken, {
-            method: "POST",
-            body: JSON.stringify({ snippet: { parentId: r.id, textOriginal: r.reply } }),
-          });
-          setAllComments(prev => prev.map(c => c.commentId === r.id ? { ...c, hasOwnerReply: true, ownerReplyText: r.reply, replyCount: c.replyCount + 1 } : c));
-          posted++;
-          await new Promise(resolve => setTimeout(resolve, 1000));
-        } catch (_) {}
+        await postReply(commentId, reply);
+        // Small delay to avoid rate limiting
+        await new Promise(resolve => setTimeout(resolve, 1500));
+      } catch (e: any) {
+        showToast(`Failed to reply to comment: ${e.message}`, 'error');
       }
-      toast(`Batch done! Posted ${posted}/${replies.length} replies.`, "success");
-    } catch (e) { toast("Batch error: " + e.message, "error"); }
-
-    setSelectedIds(new Set());
-    setBatchGenerating(false);
-  }
-
-  // ── Post single reply ────────────────────────────────────────────────────────
-  async function postReply(commentId, text) {
-    try {
-      await ytFetch("/comments?part=snippet", accessToken, {
-        method: "POST",
-        body: JSON.stringify({ snippet: { parentId: commentId, textOriginal: text } }),
-      });
-      setAllComments(prev => prev.map(c => c.commentId === commentId ? { ...c, hasOwnerReply: true, ownerReplyText: text, replyCount: c.replyCount + 1 } : c));
-      toast("Reply posted!", "success");
-    } catch (e) { toast("Failed to post: " + e.message, "error"); }
-  }
-
-  // ── Save settings ────────────────────────────────────────────────────────────
-  function saveSettings(form) {
-    setSettings(form);
-    Object.entries({ yt_api_key: form.apiKey, yt_client_id: form.clientId, groq_key: form.groqKey, groq_model: form.groqModel, custom_prompt: form.customPrompt }).forEach(([k, v]) => localStorage.setItem(k, v));
-    setSettingsOpen(false);
-    toast("Settings saved!", "success");
-  }
-
-  function logout() {
-    setAccessToken("");
-    setChannel({ id: "", title: "", avatar: "" });
-    setVideos([]);
-    setAllComments([]);
-    setSelectedVideoId("");
-    ["yt_access_token", "yt_channel_id", "yt_channel_title", "yt_channel_avatar"].forEach(k => localStorage.removeItem(k));
-    toast("Disconnected", "info");
-  }
-
-  // ── Filtering ────────────────────────────────────────────────────────────────
-  const displayComments = (() => {
-    let list = selectedVideoId ? allComments.filter(c => c.videoId === selectedVideoId) : allComments;
-    if (filter === "unreplied") list = list.filter(c => !c.hasOwnerReply);
-    if (filter === "replied") list = list.filter(c => c.hasOwnerReply);
-    if (filter === "questions") list = list.filter(c => c.textOriginal?.includes("?"));
-    if (searchQuery) {
-      const q = searchQuery.toLowerCase();
-      list = list.filter(c => c.textOriginal?.toLowerCase().includes(q) || c.authorName?.toLowerCase().includes(q));
     }
-    if (sortBy === "oldest") list = [...list].sort((a, b) => new Date(a.publishedAt) - new Date(b.publishedAt));
-    else if (sortBy === "likes") list = [...list].sort((a, b) => b.likeCount - a.likeCount);
-    else if (sortBy === "replies") list = [...list].sort((a, b) => b.replyCount - a.replyCount);
-    else list = [...list].sort((a, b) => new Date(b.publishedAt) - new Date(a.publishedAt));
-    return list;
-  })();
+    render();
+  }
 
-  const isLoggedIn = !!accessToken && !!channel.id;
-  const stats = {
-    total: allComments.length,
-    unreplied: allComments.filter(c => !c.hasOwnerReply).length,
-    replied: allComments.filter(c => c.hasOwnerReply).length,
-    questions: allComments.filter(c => c.textOriginal?.includes("?")).length,
-  };
+  state.selectedComments.clear();
+  showToast('Batch reply complete!', 'success');
+  render();
+}
 
-  // ── Render ───────────────────────────────────────────────────────────────────
-  return (
-    <div style={{ background: "#0a0a14", minHeight: "100vh", color: "#fff", fontFamily: "'DM Sans', system-ui, sans-serif", maxWidth: 430, margin: "0 auto", position: "relative", overflowX: "hidden" }}>
-      <style>{`
-        @import url('https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&display=swap');
-        * { box-sizing: border-box; margin: 0; padding: 0; }
-        ::-webkit-scrollbar { width: 4px; }
-        ::-webkit-scrollbar-track { background: #0a0a14; }
-        ::-webkit-scrollbar-thumb { background: #2a2a3e; border-radius: 4px; }
-        @keyframes spin { to { transform: rotate(360deg); } }
-        @keyframes slideUp { from { opacity: 0; transform: translateY(12px); } to { opacity: 1; transform: translateY(0); } }
-        @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: .5; } }
-        input:focus, textarea:focus, select:focus { outline: 2px solid #7c3aed !important; border-color: #7c3aed !important; }
-      `}</style>
+// =========================================
+// Filtering & Sorting
+// =========================================
+function getFilteredComments(): any[] {
+  let filtered = [...state.comments];
 
-      {/* ── Status Bar ── */}
-      <div style={{ background: "#0d0d1a", padding: "10px 16px 8px", display: "flex", justifyContent: "space-between", alignItems: "center", position: "sticky", top: 0, zIndex: 50, borderBottom: "1px solid #1a1a2e" }}>
-        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-          <div style={{ background: "linear-gradient(135deg,#7c3aed,#dc2626)", borderRadius: 10, padding: "5px 7px" }}>
-            <Youtube size={16} color="#fff" />
+  // Filter
+  switch (state.filter) {
+    case 'unreplied':
+      filtered = filtered.filter(c => !c.hasOwnerReply);
+      break;
+    case 'replied':
+      filtered = filtered.filter(c => c.hasOwnerReply);
+      break;
+    case 'questions':
+      filtered = filtered.filter(c => c.textOriginal?.includes('?'));
+      break;
+  }
+
+  // Search
+  if (state.searchQuery) {
+    const q = state.searchQuery.toLowerCase();
+    filtered = filtered.filter(
+      c =>
+        c.textOriginal?.toLowerCase().includes(q) ||
+        c.authorName?.toLowerCase().includes(q)
+    );
+  }
+
+  // Sort
+  switch (state.sortBy) {
+    case 'newest':
+      filtered.sort((a, b) => new Date(b.publishedAt).getTime() - new Date(a.publishedAt).getTime());
+      break;
+    case 'oldest':
+      filtered.sort((a, b) => new Date(a.publishedAt).getTime() - new Date(b.publishedAt).getTime());
+      break;
+    case 'likes':
+      filtered.sort((a, b) => b.likeCount - a.likeCount);
+      break;
+    case 'replies':
+      filtered.sort((a, b) => b.replyCount - a.replyCount);
+      break;
+  }
+
+  return filtered;
+}
+
+// =========================================
+// Helpers
+// =========================================
+function timeAgo(dateStr: string): string {
+  const seconds = Math.floor((Date.now() - new Date(dateStr).getTime()) / 1000);
+  if (seconds < 60) return 'just now';
+  if (seconds < 3600) return Math.floor(seconds / 60) + 'm ago';
+  if (seconds < 86400) return Math.floor(seconds / 3600) + 'h ago';
+  if (seconds < 2592000) return Math.floor(seconds / 86400) + 'd ago';
+  if (seconds < 31536000) return Math.floor(seconds / 2592000) + 'mo ago';
+  return Math.floor(seconds / 31536000) + 'y ago';
+}
+
+function escHtml(str: string): string {
+  const div = document.createElement('div');
+  div.textContent = str;
+  return div.innerHTML;
+}
+
+// =========================================
+// Render Logic
+// =========================================
+function render() {
+  const app = document.getElementById('app')!;
+  const isLoggedIn = !!state.accessToken && !!state.channelId;
+  const hasKeys = !!state.apiKey && !!state.clientId;
+
+  app.innerHTML = `
+    ${renderNavbar(isLoggedIn)}
+    ${isLoggedIn ? renderMainLayout() : renderWelcome(hasKeys)}
+    ${renderSettingsModal()}
+    ${renderBatchBar()}
+  `;
+
+  attachEvents();
+}
+
+function renderNavbar(isLoggedIn: boolean): string {
+  return `
+    <nav class="navbar">
+      <div class="navbar-brand">
+        <div class="logo-icon">💬</div>
+        <span>YT Comment AI</span>
+      </div>
+      <div class="navbar-actions">
+        ${isLoggedIn ? `
+          <div class="user-profile">
+            ${state.channelAvatar ? `<div class="user-avatar"><img src="${state.channelAvatar}" alt="avatar" /></div>` : ''}
+            <span class="user-name">${escHtml(state.channelTitle)}</span>
           </div>
-          <span style={{ fontWeight: 700, fontSize: 16, letterSpacing: "-.02em" }}>YT Reply AI</span>
+          <button class="btn btn-ghost btn-icon" id="btn-refresh" title="Refresh Videos">🔄</button>
+          <button class="btn btn-danger btn-sm" id="btn-logout">Disconnect</button>
+        ` : ''}
+        <button class="btn btn-secondary btn-icon" id="btn-settings" title="Settings">⚙️</button>
+      </div>
+    </nav>
+  `;
+}
+
+function renderWelcome(hasKeys: boolean): string {
+  return `
+    <div class="welcome-screen">
+      <div class="welcome-icon">🤖</div>
+      <h1>YouTube Comment AI</h1>
+      <p>Manage and auto-reply to your YouTube video comments using AI-powered responses. Smart, fast, and completely free.</p>
+      ${hasKeys ? `
+        <button class="btn btn-yt btn-lg" id="btn-connect">
+          ▶️ Connect YouTube Account
+        </button>
+        <div style="margin-top: 1.5rem; font-size: 0.8rem; color: var(--text-muted); background: var(--bg-card); padding: 0.75rem; border-radius: var(--radius-sm); border: 1px solid var(--border);">
+          <strong>Troubleshooting:</strong> If you see "redirect_uri_mismatch", make sure this exact URL is added to your Google Cloud Console "Authorized Redirect URIs":<br/>
+          <code style="color: var(--accent-secondary); margin-top: 0.5rem; display: block; background: #000; padding: 0.4rem; border-radius: 4px; border: 1px solid rgba(124, 58, 237, 0.3);">${(window.location.origin + window.location.pathname).replace(/\/$/, '')}</code>
         </div>
-        <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
-          {isLoggedIn && (
-            <>
-              {channel.avatar && <img src={channel.avatar} alt="" style={{ width: 28, height: 28, borderRadius: "50%", border: "2px solid #7c3aed" }} />}
-              <button onClick={() => fetchVideos(accessToken, channel.id)} style={{ background: "none", border: "none", color: "#6b7280", cursor: "pointer", padding: 4 }}>
-                <RefreshCw size={16} />
-              </button>
-              <button onClick={logout} style={{ background: "none", border: "none", color: "#6b7280", cursor: "pointer", padding: 4 }}>
-                <LogOut size={16} />
-              </button>
-            </>
-          )}
-          <button onClick={() => setSettingsOpen(true)} style={{ background: "#1a1a2e", border: "none", color: "#9ca3af", cursor: "pointer", padding: 6, borderRadius: 8 }}>
-            <Settings size={16} />
-          </button>
+      ` : `
+        <button class="btn btn-primary btn-lg" id="btn-settings-welcome">
+          ⚙️ Set Up API Keys First
+        </button>
+      `}
+      <div class="welcome-steps">
+        <div class="welcome-step">
+          <div class="step-number">1</div>
+          <h3>Add API Keys</h3>
+          <p>Set up YouTube + OpenRouter API keys in Settings</p>
+        </div>
+        <div class="welcome-step">
+          <div class="step-number">2</div>
+          <h3>Connect Account</h3>
+          <p>Sign in with your YouTube channel</p>
+        </div>
+        <div class="welcome-step">
+          <div class="step-number">3</div>
+          <h3>Auto Reply</h3>
+          <p>Let AI generate & post replies instantly</p>
+        </div>
+      </div>
+    </div>
+  `;
+}
+
+function renderMainLayout(): string {
+  return `
+    <div class="main-content">
+      ${renderSidebar()}
+      <div class="content-area">
+        ${renderMobileVideoSelector()}
+        ${state.selectedVideoId ? renderCommentsPanel() : renderSelectVideoPrompt()}
+      </div>
+    </div>
+  `;
+}
+
+function renderMobileVideoSelector(): string {
+  return `
+    <div class="mobile-video-selector">
+      <label for="mobile-video-select">📹 Select Video</label>
+      <select id="mobile-video-select" ${state.isLoadingVideos ? 'disabled' : ''}>
+        <option value="">Choose a video</option>
+        ${state.videos.map(v => {
+          const videoId = v.id?.videoId || '';
+          const title = escHtml(v.snippet?.title || 'Untitled');
+          return `<option value="${videoId}" ${state.selectedVideoId === videoId ? 'selected' : ''}>${title}</option>`;
+        }).join('')}
+      </select>
+    </div>
+  `;
+}
+
+function renderSidebar(): string {
+  return `
+    <aside class="sidebar">
+      <div class="sidebar-header">
+        <h3>📹 Your Videos</h3>
+      </div>
+      ${state.isLoadingVideos ? `
+        <div class="loading-overlay">
+          <div class="spinner"></div>
+          <span>Loading videos...</span>
+        </div>
+      ` : `
+        <ul class="video-list">
+          ${state.videos.map(v => {
+            const videoId = v.id?.videoId || '';
+            const isActive = videoId === state.selectedVideoId;
+            return `
+              <li class="video-item ${isActive ? 'active' : ''}" data-videoid="${videoId}">
+                <div class="video-thumbnail">
+                  <img src="${v.snippet?.thumbnails?.default?.url || ''}" alt="" loading="lazy" />
+                </div>
+                <div class="video-info">
+                  <h4>${escHtml(v.snippet?.title || 'Untitled')}</h4>
+                  <div class="video-meta">
+                    <span>${timeAgo(v.snippet?.publishedAt || '')}</span>
+                  </div>
+                </div>
+              </li>
+            `;
+          }).join('')}
+        </ul>
+      `}
+    </aside>
+  `;
+}
+
+function renderSelectVideoPrompt(): string {
+  return `
+    <div class="empty-state">
+      <div class="empty-icon">📺</div>
+      <h3>Select a Video</h3>
+      <p>Choose a video from the sidebar to view and manage its comments.</p>
+    </div>
+  `;
+}
+
+function renderCommentsPanel(): string {
+  const filtered = getFilteredComments();
+  const totalComments = state.comments.length;
+  const unreplied = state.comments.filter(c => !c.hasOwnerReply).length;
+  const replied = state.comments.filter(c => c.hasOwnerReply).length;
+  const questions = state.comments.filter(c => c.textOriginal?.includes('?')).length;
+  const currentVideo = state.videos.find(v => v.id?.videoId === state.selectedVideoId);
+
+  return `
+    <div id="comments-panel">
+      <div class="comments-header">
+        <h2>${escHtml(currentVideo?.snippet?.title || 'Comments')}</h2>
+      </div>
+
+      <!-- Stats -->
+      <div class="stats-bar">
+        <div class="stat-card">
+          <div class="stat-value">${totalComments}</div>
+          <div class="stat-label">Total Comments</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-value">${unreplied}</div>
+          <div class="stat-label">Unreplied</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-value">${replied}</div>
+          <div class="stat-label">Replied</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-value">${questions}</div>
+          <div class="stat-label">Questions</div>
         </div>
       </div>
 
-      {/* ── Content ── */}
-      {!isLoggedIn ? (
-        // Welcome screen
-        <div style={{ padding: "40px 20px", textAlign: "center" }}>
-          <div style={{ width: 72, height: 72, background: "linear-gradient(135deg,#7c3aed20,#dc262620)", borderRadius: 24, margin: "0 auto 20px", display: "flex", alignItems: "center", justifyContent: "center", border: "1px solid #7c3aed30" }}>
-            <Bot size={36} color="#a78bfa" />
-          </div>
-          <h1 style={{ fontSize: 26, fontWeight: 800, marginBottom: 10, letterSpacing: "-.03em" }}>YouTube Reply AI</h1>
-          <p style={{ color: "#6b7280", fontSize: 14, lineHeight: 1.6, marginBottom: 30 }}>
-            Manage and auto-reply to all your YouTube comments with AI — batch replies in a single click.
-          </p>
-
-          {settings.clientId ? (
-            <button onClick={() => window.location.href = getOAuthUrl(settings.clientId)} style={{ ...primaryBtn, marginBottom: 16, display: "flex", alignItems: "center", justifyContent: "center", gap: 8, background: "linear-gradient(135deg,#dc2626,#b91c1c)" }}>
-              <Youtube size={18} /> Connect YouTube Account
-            </button>
-          ) : (
-            <button onClick={() => setSettingsOpen(true)} style={{ ...primaryBtn, marginBottom: 16, display: "flex", alignItems: "center", justifyContent: "center", gap: 8 }}>
-              <Settings size={18} /> Set Up API Keys
-            </button>
-          )}
-
-          <div style={{ background: "#0d0d1a", border: "1px solid #1e1e2e", borderRadius: 14, padding: "14px", textAlign: "left", marginBottom: 24 }}>
-            <p style={{ color: "#6b7280", fontSize: 11, marginBottom: 6 }}>Authorized Redirect URI:</p>
-            <code style={{ color: "#a78bfa", fontSize: 11, wordBreak: "break-all" }}>{redirectUri}</code>
-          </div>
-
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 10 }}>
-            {[["⚙️", "API Keys", "Configure YouTube + Groq keys"], ["🔗", "Connect", "Sign in with YouTube OAuth"], ["🤖", "Auto Reply", "Batch AI replies instantly"]].map(([icon, t, d]) => (
-              <div key={t} style={{ background: "#0d0d1a", border: "1px solid #1e1e2e", borderRadius: 14, padding: "14px 10px", textAlign: "center" }}>
-                <div style={{ fontSize: 22, marginBottom: 6 }}>{icon}</div>
-                <div style={{ color: "#e2e8f0", fontWeight: 700, fontSize: 12, marginBottom: 4 }}>{t}</div>
-                <div style={{ color: "#4b5563", fontSize: 11 }}>{d}</div>
-              </div>
-            ))}
-          </div>
+      <!-- Toolbar -->
+      <div class="comments-toolbar">
+        <div class="filter-pills">
+          <button class="filter-pill ${state.filter === 'all' ? 'active' : ''}" data-filter="all">All</button>
+          <button class="filter-pill ${state.filter === 'unreplied' ? 'active' : ''}" data-filter="unreplied">Unreplied</button>
+          <button class="filter-pill ${state.filter === 'replied' ? 'active' : ''}" data-filter="replied">Replied</button>
+          <button class="filter-pill ${state.filter === 'questions' ? 'active' : ''}" data-filter="questions">Questions?</button>
         </div>
-      ) : (
-        <div>
-          {/* ── Stats Strip ── */}
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(4,1fr)", gap: 8, padding: "12px 12px 0" }}>
-            {[["Total", stats.total, "#a78bfa"], ["Unreplied", stats.unreplied, "#fbbf24"], ["Replied", stats.replied, "#4ade80"], ["Questions", stats.questions, "#60a5fa"]].map(([label, val, color]) => (
-              <div key={label} style={{ background: "#0d0d1a", border: "1px solid #1a1a2e", borderRadius: 12, padding: "10px 8px", textAlign: "center" }}>
-                <div style={{ color, fontSize: 20, fontWeight: 800 }}>{val}</div>
-                <div style={{ color: "#4b5563", fontSize: 10, fontWeight: 600 }}>{label}</div>
-              </div>
-            ))}
-          </div>
-
-          {/* ── Tabs ── */}
-          <div style={{ display: "flex", padding: "12px 12px 0", gap: 8 }}>
-            {[["all", <Inbox size={14} />, "All Comments"], ["videos", <PlaySquare size={14} />, "Videos"]].map(([id, icon, label]) => (
-              <button key={id} onClick={() => setActiveTab(id)} style={{ flex: 1, background: activeTab === id ? "#1a1a2e" : "none", border: activeTab === id ? "1px solid #2a2a3e" : "1px solid transparent", borderRadius: 10, padding: "9px 0", color: activeTab === id ? "#a78bfa" : "#6b7280", fontSize: 13, fontWeight: 600, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", gap: 6 }}>
-                {icon}{label}
-              </button>
-            ))}
-          </div>
-
-          {activeTab === "videos" ? (
-            // ── Videos Tab ──
-            <div style={{ padding: "12px" }}>
-              {loadingVideos ? (
-                <div style={{ textAlign: "center", padding: 40, color: "#4b5563" }}>
-                  <Loader2 size={28} style={{ animation: "spin 1s linear infinite", marginBottom: 10 }} />
-                  <p>Loading videos...</p>
-                </div>
-              ) : videos.map(v => {
-                const videoId = v.id?.videoId;
-                const isActive = videoId === selectedVideoId;
-                const vComments = allComments.filter(c => c.videoId === videoId);
-                return (
-                  <div key={videoId} onClick={() => { setSelectedVideoId(isActive ? "" : videoId); setActiveTab("all"); }} style={{ background: "#0d0d1a", border: `1px solid ${isActive ? "#7c3aed60" : "#1a1a2e"}`, borderRadius: 14, padding: "12px", marginBottom: 10, cursor: "pointer", display: "flex", gap: 12, alignItems: "center" }}>
-                    <img src={v.snippet?.thumbnails?.default?.url} alt="" style={{ width: 64, height: 48, borderRadius: 8, objectFit: "cover", flexShrink: 0, background: "#1a1a2e" }} />
-                    <div style={{ flex: 1, minWidth: 0 }}>
-                      <p style={{ color: "#e2e8f0", fontSize: 13, fontWeight: 600, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{v.snippet?.title}</p>
-                      <div style={{ display: "flex", gap: 8, marginTop: 4 }}>
-                        <span style={{ color: "#4b5563", fontSize: 11, display: "flex", alignItems: "center", gap: 3 }}><Clock size={10} />{timeAgo(v.snippet?.publishedAt)}</span>
-                        <span style={{ color: "#6b7280", fontSize: 11 }}>{vComments.length} comments</span>
-                      </div>
-                    </div>
-                    <ChevronRight size={16} color="#4b5563" style={{ flexShrink: 0 }} />
-                  </div>
-                );
-              })}
-            </div>
-          ) : (
-            // ── All Comments Tab ──
-            <div style={{ padding: "12px" }}>
-              {/* Filter/sort row */}
-              <div style={{ display: "flex", gap: 8, marginBottom: 10 }}>
-                <div style={{ position: "relative", flex: 1 }}>
-                  <Search size={14} style={{ position: "absolute", left: 10, top: "50%", transform: "translateY(-50%)", color: "#4b5563" }} />
-                  <input value={searchQuery} onChange={e => setSearchQuery(e.target.value)} placeholder="Search comments..." style={{ ...inp, paddingLeft: 32, fontSize: 13 }} />
-                </div>
-                <select value={sortBy} onChange={e => setSortBy(e.target.value)} style={{ ...inp, width: "auto", minWidth: 90, fontSize: 12, padding: "0 10px" }}>
-                  <option value="newest">Newest</option>
-                  <option value="oldest">Oldest</option>
-                  <option value="likes">Top Liked</option>
-                  <option value="replies">Most Replies</option>
-                </select>
-              </div>
-
-              {/* Filter pills */}
-              <div style={{ display: "flex", gap: 6, marginBottom: 10, overflowX: "auto", paddingBottom: 2 }}>
-                {[["all", "All"], ["unreplied", "Unreplied"], ["replied", "Replied"], ["questions", "Questions?"]].map(([id, label]) => (
-                  <button key={id} onClick={() => setFilter(id)} style={{ background: filter === id ? "#7c3aed" : "#1a1a2e", border: `1px solid ${filter === id ? "#7c3aed" : "#2a2a3e"}`, borderRadius: 20, padding: "6px 14px", color: filter === id ? "#fff" : "#9ca3af", fontSize: 12, fontWeight: 600, cursor: "pointer", flexShrink: 0 }}>{label}</button>
-                ))}
-              </div>
-
-              {/* Tone pills */}
-              <div style={{ display: "flex", gap: 6, marginBottom: 12, overflowX: "auto", paddingBottom: 2 }}>
-                <span style={{ color: "#4b5563", fontSize: 11, fontWeight: 600, display: "flex", alignItems: "center", flexShrink: 0 }}>Tone:</span>
-                {[["friendly", "😊"], ["professional", "💼"], ["casual", "😎"], ["funny", "😂"]].map(([id, emoji]) => (
-                  <button key={id} onClick={() => { setReplyTone(id); localStorage.setItem("reply_tone", id); }} style={{ background: replyTone === id ? "#1a1a2e" : "none", border: `1px solid ${replyTone === id ? "#7c3aed" : "#2a2a3e"}`, borderRadius: 20, padding: "5px 12px", color: replyTone === id ? "#a78bfa" : "#6b7280", fontSize: 12, cursor: "pointer", flexShrink: 0 }}>{emoji} {id}</button>
-                ))}
-              </div>
-
-              {/* Video filter badge */}
-              {selectedVideoId && (
-                <div style={{ background: "#1a1a2e", border: "1px solid #7c3aed40", borderRadius: 10, padding: "8px 12px", marginBottom: 10, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                  <span style={{ color: "#a78bfa", fontSize: 12 }}>Filtered: {videos.find(v => v.id?.videoId === selectedVideoId)?.snippet?.title?.slice(0, 40)}...</span>
-                  <button onClick={() => setSelectedVideoId("")} style={{ background: "none", border: "none", color: "#6b7280", cursor: "pointer" }}><X size={14} /></button>
-                </div>
-              )}
-
-              {/* Reload all button */}
-              <button onClick={loadAllComments} disabled={loadingComments} style={{ width: "100%", background: "#0d0d1a", border: "1px dashed #2a2a3e", borderRadius: 10, padding: "9px", color: loadingComments ? "#4b5563" : "#7c3aed", fontSize: 12, cursor: loadingComments ? "not-allowed" : "pointer", marginBottom: 10, display: "flex", alignItems: "center", justifyContent: "center", gap: 6 }}>
-                {loadingComments ? <><Loader2 size={13} style={{ animation: "spin 1s linear infinite" }} /> Loading all comments...</> : <><RefreshCw size={13} /> Reload all comments from all videos</>}
-              </button>
-
-              {/* Select all + count */}
-              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 10 }}>
-                <button onClick={() => {
-                  if (selectedIds.size === displayComments.length) setSelectedIds(new Set());
-                  else setSelectedIds(new Set(displayComments.map(c => c.commentId)));
-                }} style={{ background: "none", border: "none", color: "#9ca3af", cursor: "pointer", fontSize: 12, display: "flex", alignItems: "center", gap: 6 }}>
-                  {selectedIds.size === displayComments.length && displayComments.length > 0 ? <CheckSquare size={15} color="#7c3aed" /> : <Square size={15} />}
-                  Select all ({displayComments.length})
-                </button>
-                <span style={{ color: "#4b5563", fontSize: 11 }}>Serial: newest first</span>
-              </div>
-
-              {/* Comment list */}
-              {loadingComments ? (
-                <div style={{ textAlign: "center", padding: "40px 0", color: "#4b5563" }}>
-                  <Loader2 size={28} style={{ animation: "spin 1s linear infinite", marginBottom: 10 }} />
-                  <p style={{ fontSize: 13 }}>Loading comments...</p>
-                </div>
-              ) : displayComments.length === 0 ? (
-                <div style={{ textAlign: "center", padding: "40px 0", color: "#4b5563" }}>
-                  <MessageSquare size={36} style={{ marginBottom: 10, opacity: .4 }} />
-                  <p style={{ fontSize: 14 }}>No comments found</p>
-                </div>
-              ) : (
-                displayComments.map((c, i) => (
-                  <div key={c.commentId} style={{ position: "relative" }}>
-                    {/* Serial number + checkbox overlay */}
-                    <div style={{ position: "absolute", top: 14, left: 14, zIndex: 2, display: "flex", alignItems: "center", gap: 6 }}>
-                      <button onClick={() => setSelectedIds(prev => {
-                        const n = new Set(prev);
-                        n.has(c.commentId) ? n.delete(c.commentId) : n.add(c.commentId);
-                        return n;
-                      })} style={{ background: "none", border: "none", cursor: "pointer", padding: 0 }}>
-                        {selectedIds.has(c.commentId) ? <CheckSquare size={16} color="#7c3aed" /> : <Square size={16} color="#4b5563" />}
-                      </button>
-                      <span style={{ color: "#4b5563", fontSize: 10, fontWeight: 700 }}>#{i + 1}</span>
-                    </div>
-                    <div style={{ paddingLeft: 48 }}>
-                      <CommentCard
-                        comment={c}
-                        onAiReply={generateReply}
-                        onPost={postReply}
-                        videoTitle={c.videoTitle}
-                      />
-                    </div>
-                  </div>
-                ))
-              )}
-            </div>
-          )}
+        <div class="filter-group">
+          <span class="filter-label">Sort</span>
+          <select id="sort-select">
+            <option value="newest" ${state.sortBy === 'newest' ? 'selected' : ''}>Newest</option>
+            <option value="oldest" ${state.sortBy === 'oldest' ? 'selected' : ''}>Oldest</option>
+            <option value="likes" ${state.sortBy === 'likes' ? 'selected' : ''}>Most Liked</option>
+            <option value="replies" ${state.sortBy === 'replies' ? 'selected' : ''}>Most Replies</option>
+          </select>
         </div>
-      )}
+        <input class="search-input" id="search-input" type="text" placeholder="🔍 Search comments..." value="${escHtml(state.searchQuery)}" />
+      </div>
 
-      {/* ── Bottom Batch Bar ── */}
-      {selectedIds.size > 0 && (
-        <div style={{ position: "fixed", bottom: 0, left: "50%", transform: "translateX(-50%)", width: "100%", maxWidth: 430, background: "#13131f", borderTop: "1px solid #1e1e2e", padding: "12px 16px", display: "flex", gap: 10, alignItems: "center", zIndex: 100 }}>
-          <span style={{ color: "#a78bfa", fontSize: 13, fontWeight: 700, flex: 1 }}>{selectedIds.size} selected</span>
-          <button onClick={() => setSelectedIds(new Set())} style={{ background: "#1a1a2e", border: "1px solid #2a2a3e", borderRadius: 10, padding: "9px 14px", color: "#9ca3af", fontSize: 13, cursor: "pointer" }}>Clear</button>
-          <button onClick={batchGenerateAll} disabled={batchGenerating} style={{ background: batchGenerating ? "#2a2a3e" : "linear-gradient(135deg,#7c3aed,#5b21b6)", border: "none", borderRadius: 10, padding: "9px 16px", color: "#fff", fontSize: 13, fontWeight: 700, cursor: batchGenerating ? "not-allowed" : "pointer", display: "flex", alignItems: "center", gap: 6 }}>
-            {batchGenerating ? <><Loader2 size={14} style={{ animation: "spin 1s linear infinite" }} /> Generating...</> : <><Zap size={14} /> AI Reply All (JSON)</>}
-          </button>
+      <!-- Tone & Prompt -->
+      <div class="prompt-section">
+        <label>AI Reply Tone</label>
+        <div class="tone-selector">
+          <button class="filter-pill ${state.replyTone === 'friendly' ? 'active' : ''}" data-tone="friendly">😊 Friendly</button>
+          <button class="filter-pill ${state.replyTone === 'professional' ? 'active' : ''}" data-tone="professional">💼 Professional</button>
+          <button class="filter-pill ${state.replyTone === 'casual' ? 'active' : ''}" data-tone="casual">😎 Casual</button>
+          <button class="filter-pill ${state.replyTone === 'funny' ? 'active' : ''}" data-tone="funny">😂 Funny</button>
         </div>
-      )}
+      </div>
 
-      {/* ── Settings Modal ── */}
-      <SettingsModal open={settingsOpen} onClose={() => setSettingsOpen(false)} settings={settings} onSave={saveSettings} redirectUri={redirectUri} />
+      <!-- Select All -->
+      <div class="select-all-bar" style="margin-top: 1rem;">
+        <input type="checkbox" id="select-all-checkbox" ${state.selectedComments.size === filtered.length && filtered.length > 0 ? 'checked' : ''} />
+        <span>Select All (${filtered.length} comments)</span>
+        ${filtered.length > 0 && state.selectedComments.size === 0 ? `<span style="color: var(--text-muted); font-size: 0.8rem;">— Select comments for batch AI reply</span>` : ''}
+      </div>
 
-      {/* ── Toasts ── */}
-      <ToastContainer toasts={toasts} />
+      ${state.isLoadingComments ? `
+        <div class="loading-overlay">
+          <div class="spinner"></div>
+          <span>Loading comments...</span>
+        </div>
+      ` : filtered.length === 0 ? `
+        <div class="empty-state">
+          <div class="empty-icon">💬</div>
+          <h3>No comments found</h3>
+          <p>${state.comments.length === 0 ? 'This video has no comments yet.' : 'No comments match your current filters.'}</p>
+        </div>
+      ` : `
+        <div class="comment-list">
+          ${filtered.map(c => renderCommentCard(c)).join('')}
+        </div>
+      `}
+
+      ${state.nextPageToken ? `
+        <div class="pagination">
+          <button class="btn btn-secondary" id="btn-load-more">Load More Comments</button>
+        </div>
+      ` : ''}
     </div>
-  );
+  `;
 }
+
+function renderCommentCard(comment: any): string {
+  const isSelected = state.selectedComments.has(comment.commentId);
+  const isGenerating = state.generatingReplies.has(comment.commentId);
+  const draft = state.replyDrafts.get(comment.commentId) || '';
+  const isReplyOpen = state.openReplyAreas.has(comment.commentId);
+
+  return `
+    <div class="comment-card ${isSelected ? 'selected' : ''} ${comment.hasOwnerReply ? 'has-reply' : ''} ${isGenerating ? 'ai-generating' : ''}" data-comment-id="${comment.commentId}">
+      <input type="checkbox" class="comment-checkbox" data-check-id="${comment.commentId}" ${isSelected ? 'checked' : ''} />
+      <div class="comment-top">
+        <div class="comment-avatar">
+          <img src="${comment.authorAvatar}" alt="" loading="lazy" />
+        </div>
+        <div class="comment-header">
+          <div class="comment-author">${escHtml(comment.authorName)}</div>
+          <div class="comment-date">${timeAgo(comment.publishedAt)}</div>
+        </div>
+        ${comment.hasOwnerReply ? '<span class="badge badge-success">Replied</span>' : '<span class="badge badge-warning">Unreplied</span>'}
+        ${comment.textOriginal?.includes('?') ? '<span class="badge badge-info">Question</span>' : ''}
+      </div>
+      <div class="comment-body">${comment.text}</div>
+      <div class="comment-stats">
+        <span class="comment-stat">👍 ${comment.likeCount}</span>
+        <span class="comment-stat">💬 ${comment.replyCount} replies</span>
+      </div>
+      <div class="comment-actions">
+        ${!comment.hasOwnerReply ? `
+          <button class="btn btn-primary btn-sm" data-ai-reply="${comment.commentId}" ${isGenerating ? 'disabled' : ''}>
+            ${isGenerating ? '<span class="spinner" style="width:14px;height:14px;border-width:2px;"></span> Generating...' : '✨ AI Reply'}
+          </button>
+          <button class="btn btn-secondary btn-sm" data-manual-reply="${comment.commentId}">
+            ✏️ Manual Reply
+          </button>
+        ` : `
+          <button class="btn btn-ghost btn-sm" data-toggle-reply="${comment.commentId}">
+            ${isReplyOpen ? '🔼 Hide' : '🔽 View Reply'}
+          </button>
+        `}
+      </div>
+
+      ${comment.hasOwnerReply && isReplyOpen ? `
+        <div class="existing-reply">
+          <div class="reply-label">✅ Your Reply</div>
+          <p>${escHtml(comment.ownerReplyText)}</p>
+        </div>
+      ` : ''}
+
+      ${isReplyOpen && !comment.hasOwnerReply ? `
+        <div class="reply-area">
+          <textarea class="reply-textarea" data-reply-textarea="${comment.commentId}" placeholder="Type your reply...">${escHtml(draft)}</textarea>
+          <div class="reply-actions">
+            <button class="btn btn-ghost btn-sm" data-cancel-reply="${comment.commentId}">Cancel</button>
+            <button class="btn btn-primary btn-sm" data-ai-gen="${comment.commentId}" ${isGenerating ? 'disabled' : ''}>
+              ${isGenerating ? '⏳ Generating...' : '✨ Generate AI'}
+            </button>
+            <button class="btn btn-success btn-sm" data-send-reply="${comment.commentId}" ${!draft ? 'disabled' : ''}>
+              📤 Post Reply
+            </button>
+          </div>
+        </div>
+      ` : ''}
+    </div>
+  `;
+}
+
+function renderSettingsModal(): string {
+  return `
+    <div class="modal-overlay ${state.isSettingsModalOpen ? 'visible' : ''}" id="settings-modal">
+      <div class="modal">
+        <div class="modal-header">
+          <h2>⚙️ Settings</h2>
+          <button class="btn btn-ghost btn-icon" id="btn-close-modal">✕</button>
+        </div>
+        <div class="modal-body">
+          <div class="form-group">
+            <label>Authorized Redirect URI</label>
+            <div style="background: #000; padding: 0.75rem; border-radius: var(--radius-sm); border: 1px solid var(--border); font-family: monospace; font-size: 0.8rem; color: var(--accent-secondary); word-break: break-all;">
+              ${(window.location.origin + window.location.pathname).replace(/\/$/, '')}
+            </div>
+            <div class="form-hint">Copy this and paste it into "Authorized redirect URIs" in your Google Cloud Console.</div>
+          </div>
+          <div class="form-group">
+            <label for="input-api-key">YouTube API Key</label>
+            <input type="password" id="input-api-key" value="${escHtml(state.apiKey)}" placeholder="sk-or-v1-..." />
+            <div class="form-hint">From Google Cloud Console → Credentials → API Keys</div>
+          </div>
+          <div class="form-group">
+            <label for="input-client-id">OAuth Client ID</label>
+            <input type="password" id="input-client-id" value="${escHtml(state.clientId)}" placeholder="xxxx.apps.googleusercontent.com" />
+            <div class="form-hint">From Google Cloud Console → Credentials → OAuth 2.0 Client IDs</div>
+          </div>
+          <div class="form-group">
+            <label for="input-openrouter-key">OpenRouter API Key</label>
+            <input type="password" id="input-openrouter-key" value="${escHtml(state.openrouterKey)}" placeholder="sk-or-v1-..." />
+            <div class="form-hint">From <a href="https://openrouter.ai/keys" target="_blank">OpenRouter</a> — use free models</div>
+          </div>
+          <div class="form-group">
+            <label for="input-openrouter-model">OpenRouter Model</label>
+            <select id="input-openrouter-model">
+              <option value="auto" ${state.openrouterModel === 'auto' ? 'selected' : ''}>Auto (recommended free model)</option>
+              ${getOpenrouterModels().map(model => `<option value="${escHtml(model)}" ${state.openrouterModel === model ? 'selected' : ''}>${escHtml(model)}</option>`).join('')}
+            </select>
+            <div class="form-hint">
+              Uses OpenRouter free models. Auto picks a free default model.
+            </div>
+          </div>
+          <div class="form-group">
+            <label for="input-custom-prompt">Custom Prompt (Optional)</label>
+            <textarea id="input-custom-prompt" rows="3" placeholder="e.g., Always mention my channel name, include a call to action...">${escHtml(state.customPrompt)}</textarea>
+            <div class="form-hint">Additional instructions for OpenRouter when generating replies</div>
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button class="btn btn-ghost" id="btn-cancel-settings">Cancel</button>
+          <button class="btn btn-primary" id="btn-save-settings">Save Settings</button>
+        </div>
+      </div>
+    </div>
+  `;
+}
+
+function renderBatchBar(): string {
+  return `
+    <div class="batch-bar ${state.selectedComments.size > 0 ? 'visible' : ''}">
+      <span class="batch-count">${state.selectedComments.size} selected</span>
+      <button class="btn btn-primary btn-sm" id="btn-batch-ai-reply">✨ AI Reply All</button>
+      <button class="btn btn-ghost btn-sm" id="btn-clear-selection">Clear</button>
+    </div>
+  `;
+}
+
+// =========================================
+// Event Handling
+// =========================================
+function attachEvents() {
+  // Settings
+  document.getElementById('btn-settings')?.addEventListener('click', async () => {
+    toggleModal(true);
+    render();
+  });
+  document.getElementById('btn-settings-welcome')?.addEventListener('click', async () => {
+    toggleModal(true);
+    render();
+  });
+  document.getElementById('btn-close-modal')?.addEventListener('click', () => {
+    toggleModal(false);
+    render();
+  });
+  document.getElementById('btn-cancel-settings')?.addEventListener('click', () => {
+    toggleModal(false);
+    render();
+  });
+  document.getElementById('btn-save-settings')?.addEventListener('click', saveSettings);
+
+  // Connect
+  document.getElementById('btn-connect')?.addEventListener('click', () => {
+    window.location.href = getOAuthUrl();
+  });
+
+  // Logout
+  document.getElementById('btn-logout')?.addEventListener('click', () => {
+    state.accessToken = '';
+    state.channelId = '';
+    state.channelTitle = '';
+    state.channelAvatar = '';
+    state.videos = [];
+    state.comments = [];
+    state.selectedVideoId = '';
+    localStorage.removeItem('yt_access_token');
+    localStorage.removeItem('yt_channel_id');
+    localStorage.removeItem('yt_channel_title');
+    localStorage.removeItem('yt_channel_avatar');
+    showToast('Disconnected from YouTube', 'info');
+    render();
+  });
+
+  // Refresh
+  document.getElementById('btn-refresh')?.addEventListener('click', () => {
+    fetchVideos();
+    showToast('Refreshing videos...', 'info');
+  });
+
+  // Video selection
+  document.querySelectorAll('.video-item').forEach(el => {
+    el.addEventListener('click', () => {
+      const videoId = (el as HTMLElement).dataset.videoid || '';
+      if (videoId && videoId !== state.selectedVideoId) {
+        state.selectedVideoId = videoId;
+        state.comments = [];
+        state.selectedComments.clear();
+        state.openReplyAreas.clear();
+        state.replyDrafts.clear();
+        render();
+        fetchComments(videoId);
+      }
+    });
+  });
+
+  document.getElementById('mobile-video-select')?.addEventListener('change', (e) => {
+    const videoId = (e.target as HTMLSelectElement).value || '';
+    if (videoId && videoId !== state.selectedVideoId) {
+      state.selectedVideoId = videoId;
+      state.comments = [];
+      state.selectedComments.clear();
+      state.openReplyAreas.clear();
+      state.replyDrafts.clear();
+      render();
+      fetchComments(videoId);
+    }
+  });
+
+  // Filter pills
+  document.querySelectorAll('.filter-pill[data-filter]').forEach(el => {
+    el.addEventListener('click', () => {
+      state.filter = (el as HTMLElement).dataset.filter || 'all';
+      render();
+    });
+  });
+
+  // Tone pills
+  document.querySelectorAll('.filter-pill[data-tone]').forEach(el => {
+    el.addEventListener('click', () => {
+      state.replyTone = (el as HTMLElement).dataset.tone || 'friendly';
+      localStorage.setItem('reply_tone', state.replyTone);
+      render();
+    });
+  });
+
+  // Sort
+  document.getElementById('sort-select')?.addEventListener('change', (e) => {
+    state.sortBy = (e.target as HTMLSelectElement).value;
+    render();
+  });
+
+  // Search
+  document.getElementById('search-input')?.addEventListener('input', (e) => {
+    state.searchQuery = (e.target as HTMLInputElement).value;
+    render();
+    // Re-focus input after render
+    const input = document.getElementById('search-input') as HTMLInputElement;
+    if (input) {
+      input.focus();
+      input.setSelectionRange(input.value.length, input.value.length);
+    }
+  });
+
+  // Select all
+  document.getElementById('select-all-checkbox')?.addEventListener('change', (e) => {
+    const checked = (e.target as HTMLInputElement).checked;
+    const filtered = getFilteredComments();
+    if (checked) {
+      filtered.forEach(c => state.selectedComments.add(c.commentId));
+    } else {
+      state.selectedComments.clear();
+    }
+    render();
+  });
+
+  // Individual checkboxes
+  document.querySelectorAll('.comment-checkbox').forEach(el => {
+    el.addEventListener('change', (e) => {
+      const id = (el as HTMLElement).dataset.checkId || '';
+      if ((e.target as HTMLInputElement).checked) {
+        state.selectedComments.add(id);
+      } else {
+        state.selectedComments.delete(id);
+      }
+      render();
+    });
+  });
+
+  // AI Reply buttons
+  document.querySelectorAll('[data-ai-reply]').forEach(el => {
+    el.addEventListener('click', () => {
+      const id = (el as HTMLElement).dataset.aiReply || '';
+      generateSingleReply(id);
+    });
+  });
+
+  // Manual Reply buttons
+  document.querySelectorAll('[data-manual-reply]').forEach(el => {
+    el.addEventListener('click', () => {
+      const id = (el as HTMLElement).dataset.manualReply || '';
+      state.openReplyAreas.add(id);
+      render();
+    });
+  });
+
+  // Toggle existing reply view
+  document.querySelectorAll('[data-toggle-reply]').forEach(el => {
+    el.addEventListener('click', () => {
+      const id = (el as HTMLElement).dataset.toggleReply || '';
+      if (state.openReplyAreas.has(id)) {
+        state.openReplyAreas.delete(id);
+      } else {
+        state.openReplyAreas.add(id);
+      }
+      render();
+    });
+  });
+
+  // Cancel reply
+  document.querySelectorAll('[data-cancel-reply]').forEach(el => {
+    el.addEventListener('click', () => {
+      const id = (el as HTMLElement).dataset.cancelReply || '';
+      state.openReplyAreas.delete(id);
+      state.replyDrafts.delete(id);
+      render();
+    });
+  });
+
+  // Generate AI in reply area
+  document.querySelectorAll('[data-ai-gen]').forEach(el => {
+    el.addEventListener('click', () => {
+      const id = (el as HTMLElement).dataset.aiGen || '';
+      generateSingleReply(id);
+    });
+  });
+
+  // Send reply
+  document.querySelectorAll('[data-send-reply]').forEach(el => {
+    el.addEventListener('click', () => {
+      const id = (el as HTMLElement).dataset.sendReply || '';
+      const draft = state.replyDrafts.get(id);
+      if (draft) {
+        postReply(id, draft);
+      }
+    });
+  });
+
+  // Reply textarea changes
+  document.querySelectorAll('[data-reply-textarea]').forEach(el => {
+    el.addEventListener('input', (e) => {
+      const id = (el as HTMLElement).dataset.replyTextarea || '';
+      state.replyDrafts.set(id, (e.target as HTMLTextAreaElement).value);
+      // Update send button state
+      const sendBtn = document.querySelector(`[data-send-reply="${id}"]`) as HTMLButtonElement;
+      if (sendBtn) sendBtn.disabled = !(e.target as HTMLTextAreaElement).value.trim();
+    });
+  });
+
+  // Load more
+  document.getElementById('btn-load-more')?.addEventListener('click', () => {
+    if (state.nextPageToken && state.selectedVideoId) {
+      fetchComments(state.selectedVideoId, state.nextPageToken);
+    }
+  });
+
+  // Batch actions
+  document.getElementById('btn-batch-ai-reply')?.addEventListener('click', batchGenerateAndReply);
+  document.getElementById('btn-clear-selection')?.addEventListener('click', () => {
+    state.selectedComments.clear();
+    render();
+  });
+
+  // Click outside modal to close
+  document.getElementById('settings-modal')?.addEventListener('click', (e) => {
+    if ((e.target as HTMLElement).id === 'settings-modal') {
+      toggleModal(false);
+      render();
+    }
+  });
+}
+
+function toggleModal(show: boolean) {
+  state.isSettingsModalOpen = show;
+}
+
+function saveSettings() {
+  const apiKey = (document.getElementById('input-api-key') as HTMLInputElement)?.value.trim() || '';
+  const clientId = (document.getElementById('input-client-id') as HTMLInputElement)?.value.trim() || '';
+  const openrouterKey = (document.getElementById('input-openrouter-key') as HTMLInputElement)?.value.trim() || '';
+  const openrouterModel = (document.getElementById('input-openrouter-model') as HTMLSelectElement)?.value || 'auto';
+  const customPrompt = (document.getElementById('input-custom-prompt') as HTMLTextAreaElement)?.value.trim() || '';
+
+  state.apiKey = apiKey;
+  state.clientId = clientId;
+  state.openrouterKey = openrouterKey;
+  state.openrouterModel = openrouterModel;
+  state.customPrompt = customPrompt;
+
+  localStorage.setItem('yt_api_key', apiKey);
+  localStorage.setItem('yt_client_id', clientId);
+  localStorage.setItem('openrouter_key', openrouterKey);
+  localStorage.setItem('openrouter_model', openrouterModel);
+  localStorage.setItem('custom_prompt', customPrompt);
+
+  toggleModal(false);
+  showToast('Settings saved!', 'success');
+  render();
+}
+
+// =========================================
+// Init
+// =========================================
+function init() {
+  handleOAuthCallback();
+  render();
+
+
+  // If already logged in, fetch data
+  if (state.accessToken) {
+    if (!state.channelId) {
+      fetchChannelInfo();
+    } else {
+      fetchVideos();
+    }
+  }
+}
+
+init();
