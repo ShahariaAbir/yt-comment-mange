@@ -344,6 +344,61 @@ Comment: "${commentText}"`;
   }
 }
 
+async function fetchAvailableGeminiModels(force = false): Promise<string[]> {
+  if (!state.geminiKey) return [];
+  if (!force && state.availableGeminiModels.length > 0) return state.availableGeminiModels;
+
+  state.isLoadingGeminiModels = true;
+  try {
+    const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models?key=${state.geminiKey}`);
+    if (!res.ok) {
+      const errData = await res.json().catch(() => ({}));
+      throw new Error(errData.error?.message || `Gemini models API error ${res.status}`);
+    }
+    const data = await res.json();
+    const models: string[] = (data.models || [])
+      .filter((model: any) => {
+        const name = model?.name || '';
+        if (!name.startsWith('models/gemini')) return false;
+        if ((model?.supportedGenerationMethods || []).indexOf('generateContent') === -1) return false;
+        return !name.includes('embedding') && !name.includes('aqa');
+      })
+      .map((model: any) => String(model.name).replace('models/', ''));
+
+    const ordered = [
+      ...GEMINI_FREE_MODEL_PREFERENCES.filter(model => models.includes(model)),
+      ...models.filter(model => !GEMINI_FREE_MODEL_PREFERENCES.includes(model)),
+    ];
+
+    state.availableGeminiModels = [...new Set(ordered)];
+    return state.availableGeminiModels;
+  } catch (e: any) {
+    if (force) {
+      showToast(`Could not load Gemini model list: ${e.message}`, 'warning');
+    }
+    return state.availableGeminiModels;
+  } finally {
+    state.isLoadingGeminiModels = false;
+  }
+}
+
+async function resolveGeminiModel(): Promise<string> {
+  const models = await fetchAvailableGeminiModels();
+
+  if (state.geminiModel !== 'auto') {
+    if (!models.length || models.includes(state.geminiModel)) {
+      return state.geminiModel;
+    }
+    showToast(`Selected Gemini model is unavailable; using ${models[0]} instead.`, 'warning');
+    state.geminiModel = 'auto';
+    localStorage.setItem('gemini_model', 'auto');
+    return models[0];
+  }
+
+  if (models.length > 0) return models[0];
+  return GEMINI_FREE_MODEL_PREFERENCES[0];
+}
+
 async function generateSingleReply(commentId: string) {
   const comment = state.comments.find(c => c.commentId === commentId);
   if (!comment) return;
@@ -833,6 +888,16 @@ function renderSettingsModal(): string {
             </div>
           </div>
           <div class="form-group">
+            <label for="input-gemini-model">Gemini Model</label>
+            <select id="input-gemini-model">
+              <option value="auto" ${state.geminiModel === 'auto' ? 'selected' : ''}>Auto (recommended free model)</option>
+              ${state.availableGeminiModels.map(model => `<option value="${escHtml(model)}" ${state.geminiModel === model ? 'selected' : ''}>${escHtml(model)}</option>`).join('')}
+            </select>
+            <div class="form-hint">
+              Uses free Gemini models available to your API key.${state.isLoadingGeminiModels ? ' Loading models...' : ''}
+            </div>
+          </div>
+          <div class="form-group">
             <label for="input-custom-prompt">Custom Prompt (Optional)</label>
             <textarea id="input-custom-prompt" rows="3" placeholder="e.g., Always mention my channel name, include a call to action...">${escHtml(state.customPrompt)}</textarea>
             <div class="form-hint">Additional instructions for OpenRouter when generating replies</div>
@@ -1095,6 +1160,7 @@ function toggleModal(show: boolean) {
 }
 
 function saveSettings() {
+  const previousGeminiKey = state.geminiKey;
   const apiKey = (document.getElementById('input-api-key') as HTMLInputElement)?.value.trim() || '';
   const clientId = (document.getElementById('input-client-id') as HTMLInputElement)?.value.trim() || '';
   const openrouterKey = (document.getElementById('input-openrouter-key') as HTMLInputElement)?.value.trim() || '';
@@ -1106,6 +1172,7 @@ function saveSettings() {
   state.openrouterKey = openrouterKey;
   state.openrouterModel = openrouterModel;
   state.customPrompt = customPrompt;
+  state.availableGeminiModels = geminiKey === previousGeminiKey ? state.availableGeminiModels : [];
 
   localStorage.setItem('yt_api_key', apiKey);
   localStorage.setItem('yt_client_id', clientId);
