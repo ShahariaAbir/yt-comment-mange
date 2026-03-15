@@ -10,6 +10,9 @@ interface AppState {
   apiKey: string;
   clientId: string;
   geminiKey: string;
+  geminiModel: string;
+  availableGeminiModels: string[];
+  isLoadingGeminiModels: boolean;
   accessToken: string;
   channelId: string;
   channelTitle: string;
@@ -29,12 +32,16 @@ interface AppState {
   generatingReplies: Set<string>;
   replyDrafts: Map<string, string>;
   openReplyAreas: Set<string>;
+  isSettingsModalOpen: boolean;
 }
 
 const state: AppState = {
   apiKey: localStorage.getItem('yt_api_key') || '',
   clientId: localStorage.getItem('yt_client_id') || '',
   geminiKey: localStorage.getItem('gemini_key') || '',
+  geminiModel: localStorage.getItem('gemini_model') || 'auto',
+  availableGeminiModels: [],
+  isLoadingGeminiModels: false,
   accessToken: localStorage.getItem('yt_access_token') || '',
   channelId: localStorage.getItem('yt_channel_id') || '',
   channelTitle: localStorage.getItem('yt_channel_title') || '',
@@ -54,7 +61,15 @@ const state: AppState = {
   generatingReplies: new Set(),
   replyDrafts: new Map(),
   openReplyAreas: new Set(),
+  isSettingsModalOpen: false,
 };
+
+const GEMINI_FREE_MODEL_PREFERENCES = [
+  'gemini-2.0-flash-lite',
+  'gemini-2.0-flash',
+  'gemini-1.5-flash',
+  'gemini-1.5-flash-8b',
+];
 
 // =========================================
 // Toast System
@@ -280,8 +295,9 @@ Comment: "${commentText}"
 Reply:`;
 
   try {
+    const selectedModel = await resolveGeminiModel();
     const res = await fetch(
-      `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${state.geminiKey}`,
+      `https://generativelanguage.googleapis.com/v1beta/models/${selectedModel}:generateContent?key=${state.geminiKey}`,
       {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -305,6 +321,61 @@ Reply:`;
     showToast('Gemini AI error: ' + e.message, 'error');
     return '';
   }
+}
+
+async function fetchAvailableGeminiModels(force = false): Promise<string[]> {
+  if (!state.geminiKey) return [];
+  if (!force && state.availableGeminiModels.length > 0) return state.availableGeminiModels;
+
+  state.isLoadingGeminiModels = true;
+  try {
+    const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models?key=${state.geminiKey}`);
+    if (!res.ok) {
+      const errData = await res.json().catch(() => ({}));
+      throw new Error(errData.error?.message || `Gemini models API error ${res.status}`);
+    }
+    const data = await res.json();
+    const models: string[] = (data.models || [])
+      .filter((model: any) => {
+        const name = model?.name || '';
+        if (!name.startsWith('models/gemini')) return false;
+        if ((model?.supportedGenerationMethods || []).indexOf('generateContent') === -1) return false;
+        return !name.includes('embedding') && !name.includes('aqa');
+      })
+      .map((model: any) => String(model.name).replace('models/', ''));
+
+    const ordered = [
+      ...GEMINI_FREE_MODEL_PREFERENCES.filter(model => models.includes(model)),
+      ...models.filter(model => !GEMINI_FREE_MODEL_PREFERENCES.includes(model)),
+    ];
+
+    state.availableGeminiModels = [...new Set(ordered)];
+    return state.availableGeminiModels;
+  } catch (e: any) {
+    if (force) {
+      showToast(`Could not load Gemini model list: ${e.message}`, 'warning');
+    }
+    return state.availableGeminiModels;
+  } finally {
+    state.isLoadingGeminiModels = false;
+  }
+}
+
+async function resolveGeminiModel(): Promise<string> {
+  const models = await fetchAvailableGeminiModels();
+
+  if (state.geminiModel !== 'auto') {
+    if (!models.length || models.includes(state.geminiModel)) {
+      return state.geminiModel;
+    }
+    showToast(`Selected Gemini model is unavailable; using ${models[0]} instead.`, 'warning');
+    state.geminiModel = 'auto';
+    localStorage.setItem('gemini_model', 'auto');
+    return models[0];
+  }
+
+  if (models.length > 0) return models[0];
+  return GEMINI_FREE_MODEL_PREFERENCES[0];
 }
 
 async function generateSingleReply(commentId: string) {
@@ -522,8 +593,25 @@ function renderMainLayout(): string {
     <div class="main-content">
       ${renderSidebar()}
       <div class="content-area">
+        ${renderMobileVideoSelector()}
         ${state.selectedVideoId ? renderCommentsPanel() : renderSelectVideoPrompt()}
       </div>
+    </div>
+  `;
+}
+
+function renderMobileVideoSelector(): string {
+  return `
+    <div class="mobile-video-selector">
+      <label for="mobile-video-select">📹 Select Video</label>
+      <select id="mobile-video-select" ${state.isLoadingVideos ? 'disabled' : ''}>
+        <option value="">Choose a video</option>
+        ${state.videos.map(v => {
+          const videoId = v.id?.videoId || '';
+          const title = escHtml(v.snippet?.title || 'Untitled');
+          return `<option value="${videoId}" ${state.selectedVideoId === videoId ? 'selected' : ''}>${title}</option>`;
+        }).join('')}
+      </select>
     </div>
   `;
 }
@@ -739,7 +827,7 @@ function renderCommentCard(comment: any): string {
 
 function renderSettingsModal(): string {
   return `
-    <div class="modal-overlay" id="settings-modal">
+    <div class="modal-overlay ${state.isSettingsModalOpen ? 'visible' : ''}" id="settings-modal">
       <div class="modal">
         <div class="modal-header">
           <h2>⚙️ Settings</h2>
@@ -767,6 +855,16 @@ function renderSettingsModal(): string {
             <label for="input-gemini-key">Gemini API Key</label>
             <input type="password" id="input-gemini-key" value="${escHtml(state.geminiKey)}" placeholder="AIzaSy..." />
             <div class="form-hint">From <a href="https://aistudio.google.com/apikey" target="_blank">Google AI Studio</a> — 100% free</div>
+          </div>
+          <div class="form-group">
+            <label for="input-gemini-model">Gemini Model</label>
+            <select id="input-gemini-model">
+              <option value="auto" ${state.geminiModel === 'auto' ? 'selected' : ''}>Auto (recommended free model)</option>
+              ${state.availableGeminiModels.map(model => `<option value="${escHtml(model)}" ${state.geminiModel === model ? 'selected' : ''}>${escHtml(model)}</option>`).join('')}
+            </select>
+            <div class="form-hint">
+              Uses free Gemini models available to your API key.${state.isLoadingGeminiModels ? ' Loading models...' : ''}
+            </div>
           </div>
           <div class="form-group">
             <label for="input-custom-prompt">Custom Prompt (Optional)</label>
@@ -798,10 +896,26 @@ function renderBatchBar(): string {
 // =========================================
 function attachEvents() {
   // Settings
-  document.getElementById('btn-settings')?.addEventListener('click', () => toggleModal(true));
-  document.getElementById('btn-settings-welcome')?.addEventListener('click', () => toggleModal(true));
-  document.getElementById('btn-close-modal')?.addEventListener('click', () => toggleModal(false));
-  document.getElementById('btn-cancel-settings')?.addEventListener('click', () => toggleModal(false));
+  document.getElementById('btn-settings')?.addEventListener('click', async () => {
+    toggleModal(true);
+    render();
+    await fetchAvailableGeminiModels(true);
+    render();
+  });
+  document.getElementById('btn-settings-welcome')?.addEventListener('click', async () => {
+    toggleModal(true);
+    render();
+    await fetchAvailableGeminiModels(true);
+    render();
+  });
+  document.getElementById('btn-close-modal')?.addEventListener('click', () => {
+    toggleModal(false);
+    render();
+  });
+  document.getElementById('btn-cancel-settings')?.addEventListener('click', () => {
+    toggleModal(false);
+    render();
+  });
   document.getElementById('btn-save-settings')?.addEventListener('click', saveSettings);
 
   // Connect
@@ -846,6 +960,19 @@ function attachEvents() {
         fetchComments(videoId);
       }
     });
+  });
+
+  document.getElementById('mobile-video-select')?.addEventListener('change', (e) => {
+    const videoId = (e.target as HTMLSelectElement).value || '';
+    if (videoId && videoId !== state.selectedVideoId) {
+      state.selectedVideoId = videoId;
+      state.comments = [];
+      state.selectedComments.clear();
+      state.openReplyAreas.clear();
+      state.replyDrafts.clear();
+      render();
+      fetchComments(videoId);
+    }
   });
 
   // Filter pills
@@ -996,35 +1123,34 @@ function attachEvents() {
   document.getElementById('settings-modal')?.addEventListener('click', (e) => {
     if ((e.target as HTMLElement).id === 'settings-modal') {
       toggleModal(false);
+      render();
     }
   });
 }
 
 function toggleModal(show: boolean) {
-  const modal = document.getElementById('settings-modal');
-  if (modal) {
-    if (show) {
-      modal.classList.add('visible');
-    } else {
-      modal.classList.remove('visible');
-    }
-  }
+  state.isSettingsModalOpen = show;
 }
 
 function saveSettings() {
+  const previousGeminiKey = state.geminiKey;
   const apiKey = (document.getElementById('input-api-key') as HTMLInputElement)?.value.trim() || '';
   const clientId = (document.getElementById('input-client-id') as HTMLInputElement)?.value.trim() || '';
   const geminiKey = (document.getElementById('input-gemini-key') as HTMLInputElement)?.value.trim() || '';
+  const geminiModel = (document.getElementById('input-gemini-model') as HTMLSelectElement)?.value || 'auto';
   const customPrompt = (document.getElementById('input-custom-prompt') as HTMLTextAreaElement)?.value.trim() || '';
 
   state.apiKey = apiKey;
   state.clientId = clientId;
   state.geminiKey = geminiKey;
+  state.geminiModel = geminiModel;
   state.customPrompt = customPrompt;
+  state.availableGeminiModels = geminiKey === previousGeminiKey ? state.availableGeminiModels : [];
 
   localStorage.setItem('yt_api_key', apiKey);
   localStorage.setItem('yt_client_id', clientId);
   localStorage.setItem('gemini_key', geminiKey);
+  localStorage.setItem('gemini_model', geminiModel);
   localStorage.setItem('custom_prompt', customPrompt);
 
   toggleModal(false);
@@ -1038,6 +1164,10 @@ function saveSettings() {
 function init() {
   handleOAuthCallback();
   render();
+
+  if (state.geminiKey) {
+    fetchAvailableGeminiModels();
+  }
 
   // If already logged in, fetch data
   if (state.accessToken) {
