@@ -9,10 +9,9 @@ import './style.css';
 interface AppState {
   apiKey: string;
   clientId: string;
-  geminiKey: string;
-  geminiModel: string;
-  availableGeminiModels: string[];
-  isLoadingGeminiModels: boolean;
+  openrouterKey: string;
+  openrouterModel: string;
+  availableOpenrouterModels: string[];
   accessToken: string;
   channelId: string;
   channelTitle: string;
@@ -38,10 +37,9 @@ interface AppState {
 const state: AppState = {
   apiKey: localStorage.getItem('yt_api_key') || '',
   clientId: localStorage.getItem('yt_client_id') || '',
-  geminiKey: localStorage.getItem('gemini_key') || '',
-  geminiModel: localStorage.getItem('gemini_model') || 'auto',
-  availableGeminiModels: [],
-  isLoadingGeminiModels: false,
+  openrouterKey: localStorage.getItem('openrouter_key') || '',
+  openrouterModel: localStorage.getItem('openrouter_model') || 'auto',
+  availableOpenrouterModels: [],
   accessToken: localStorage.getItem('yt_access_token') || '',
   channelId: localStorage.getItem('yt_channel_id') || '',
   channelTitle: localStorage.getItem('yt_channel_title') || '',
@@ -64,11 +62,11 @@ const state: AppState = {
   isSettingsModalOpen: false,
 };
 
-const GEMINI_FREE_MODEL_PREFERENCES = [
-  'gemini-2.0-flash-lite',
-  'gemini-2.0-flash',
-  'gemini-1.5-flash',
-  'gemini-1.5-flash-8b',
+const OPENROUTER_FREE_MODEL_PREFERENCES = [
+  'meta-llama/llama-3.3-8b-instruct:free',
+  'mistralai/mistral-7b-instruct:free',
+  'google/gemma-2-9b-it:free',
+  'qwen/qwen-2.5-7b-instruct:free',
 ];
 
 // =========================================
@@ -269,11 +267,28 @@ async function postReply(commentId: string, text: string) {
 }
 
 // =========================================
-// Gemini AI
+// OpenRouter AI
 // =========================================
+function getOpenrouterModels(): string[] {
+  if (state.availableOpenrouterModels.length > 0) {
+    return state.availableOpenrouterModels;
+  }
+  return OPENROUTER_FREE_MODEL_PREFERENCES;
+}
+
+function resolveOpenrouterModel(): string {
+  const models = getOpenrouterModels();
+
+  if (state.openrouterModel !== 'auto') {
+    return state.openrouterModel;
+  }
+
+  return models[0] || OPENROUTER_FREE_MODEL_PREFERENCES[0];
+}
+
 async function generateReply(commentText: string, videoTitle?: string): Promise<string> {
-  if (!state.geminiKey) {
-    showToast('Please set your Gemini API key in Settings', 'warning');
+  if (!state.openrouterKey) {
+    showToast('Please set your OpenRouter API key in Settings', 'warning');
     return '';
   }
 
@@ -285,40 +300,46 @@ async function generateReply(commentText: string, videoTitle?: string): Promise<
   };
 
   const tone = toneDescriptions[state.replyTone] || toneDescriptions.friendly;
-  const customInstructions = state.customPrompt ? `\nAdditional instructions: ${state.customPrompt}` : '';
+  const customInstructions = state.customPrompt ? `
+Additional instructions: ${state.customPrompt}` : '';
+  const selectedModel = resolveOpenrouterModel();
 
   const prompt = `You are a YouTuber replying to a comment on your video${videoTitle ? ` titled "${videoTitle}"` : ''}.
 Write a ${tone} reply to this YouTube comment. Keep it concise (1-3 sentences). Be genuine and engaging. Do not use hashtags. Reply as if you are the creator.${customInstructions}
 
-Comment: "${commentText}"
-
-Reply:`;
+Comment: "${commentText}"`;
 
   try {
-    const selectedModel = await resolveGeminiModel();
-    const res = await fetch(
-      `https://generativelanguage.googleapis.com/v1beta/models/${selectedModel}:generateContent?key=${state.geminiKey}`,
-      {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          contents: [{ parts: [{ text: prompt }] }],
-          generationConfig: {
-            temperature: 0.8,
-            maxOutputTokens: 150,
-          },
-        }),
-      }
-    );
+    const res = await fetch('https://openrouter.ai/api/v1/chat/completions', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${state.openrouterKey}`,
+        'HTTP-Referer': window.location.origin,
+        'X-Title': 'YT Comment AI Manager',
+      },
+      body: JSON.stringify({
+        model: selectedModel,
+        messages: [
+          { role: 'system', content: 'You write short and natural YouTube creator replies.' },
+          { role: 'user', content: prompt },
+        ],
+        temperature: 0.8,
+        max_tokens: 150,
+      }),
+    });
+
     if (!res.ok) {
       const errData = await res.json().catch(() => ({}));
-      throw new Error(errData.error?.message || `Gemini API error ${res.status}`);
+      throw new Error(errData.error?.message || `OpenRouter API error ${res.status}`);
     }
+
     const data = await res.json();
-    const reply = data.candidates?.[0]?.content?.parts?.[0]?.text?.trim() || '';
+    const reply = data.choices?.[0]?.message?.content?.trim() || '';
+    if (!reply) throw new Error('No reply returned from OpenRouter model');
     return reply;
   } catch (e: any) {
-    showToast('Gemini AI error: ' + e.message, 'error');
+    showToast('OpenRouter AI error: ' + e.message, 'error');
     return '';
   }
 }
@@ -571,7 +592,7 @@ function renderWelcome(hasKeys: boolean): string {
         <div class="welcome-step">
           <div class="step-number">1</div>
           <h3>Add API Keys</h3>
-          <p>Set up YouTube & Gemini API keys in Settings</p>
+          <p>Set up YouTube + OpenRouter API keys in Settings</p>
         </div>
         <div class="welcome-step">
           <div class="step-number">2</div>
@@ -843,7 +864,7 @@ function renderSettingsModal(): string {
           </div>
           <div class="form-group">
             <label for="input-api-key">YouTube API Key</label>
-            <input type="password" id="input-api-key" value="${escHtml(state.apiKey)}" placeholder="AIzaSy..." />
+            <input type="password" id="input-api-key" value="${escHtml(state.apiKey)}" placeholder="sk-or-v1-..." />
             <div class="form-hint">From Google Cloud Console → Credentials → API Keys</div>
           </div>
           <div class="form-group">
@@ -852,9 +873,19 @@ function renderSettingsModal(): string {
             <div class="form-hint">From Google Cloud Console → Credentials → OAuth 2.0 Client IDs</div>
           </div>
           <div class="form-group">
-            <label for="input-gemini-key">Gemini API Key</label>
-            <input type="password" id="input-gemini-key" value="${escHtml(state.geminiKey)}" placeholder="AIzaSy..." />
-            <div class="form-hint">From <a href="https://aistudio.google.com/apikey" target="_blank">Google AI Studio</a> — 100% free</div>
+            <label for="input-openrouter-key">OpenRouter API Key</label>
+            <input type="password" id="input-openrouter-key" value="${escHtml(state.openrouterKey)}" placeholder="sk-or-v1-..." />
+            <div class="form-hint">From <a href="https://openrouter.ai/keys" target="_blank">OpenRouter</a> — use free models</div>
+          </div>
+          <div class="form-group">
+            <label for="input-openrouter-model">OpenRouter Model</label>
+            <select id="input-openrouter-model">
+              <option value="auto" ${state.openrouterModel === 'auto' ? 'selected' : ''}>Auto (recommended free model)</option>
+              ${getOpenrouterModels().map(model => `<option value="${escHtml(model)}" ${state.openrouterModel === model ? 'selected' : ''}>${escHtml(model)}</option>`).join('')}
+            </select>
+            <div class="form-hint">
+              Uses OpenRouter free models. Auto picks a free default model.
+            </div>
           </div>
           <div class="form-group">
             <label for="input-gemini-model">Gemini Model</label>
@@ -869,7 +900,7 @@ function renderSettingsModal(): string {
           <div class="form-group">
             <label for="input-custom-prompt">Custom Prompt (Optional)</label>
             <textarea id="input-custom-prompt" rows="3" placeholder="e.g., Always mention my channel name, include a call to action...">${escHtml(state.customPrompt)}</textarea>
-            <div class="form-hint">Additional instructions for Gemini when generating replies</div>
+            <div class="form-hint">Additional instructions for OpenRouter when generating replies</div>
           </div>
         </div>
         <div class="modal-footer">
@@ -899,13 +930,9 @@ function attachEvents() {
   document.getElementById('btn-settings')?.addEventListener('click', async () => {
     toggleModal(true);
     render();
-    await fetchAvailableGeminiModels(true);
-    render();
   });
   document.getElementById('btn-settings-welcome')?.addEventListener('click', async () => {
     toggleModal(true);
-    render();
-    await fetchAvailableGeminiModels(true);
     render();
   });
   document.getElementById('btn-close-modal')?.addEventListener('click', () => {
@@ -1136,21 +1163,21 @@ function saveSettings() {
   const previousGeminiKey = state.geminiKey;
   const apiKey = (document.getElementById('input-api-key') as HTMLInputElement)?.value.trim() || '';
   const clientId = (document.getElementById('input-client-id') as HTMLInputElement)?.value.trim() || '';
-  const geminiKey = (document.getElementById('input-gemini-key') as HTMLInputElement)?.value.trim() || '';
-  const geminiModel = (document.getElementById('input-gemini-model') as HTMLSelectElement)?.value || 'auto';
+  const openrouterKey = (document.getElementById('input-openrouter-key') as HTMLInputElement)?.value.trim() || '';
+  const openrouterModel = (document.getElementById('input-openrouter-model') as HTMLSelectElement)?.value || 'auto';
   const customPrompt = (document.getElementById('input-custom-prompt') as HTMLTextAreaElement)?.value.trim() || '';
 
   state.apiKey = apiKey;
   state.clientId = clientId;
-  state.geminiKey = geminiKey;
-  state.geminiModel = geminiModel;
+  state.openrouterKey = openrouterKey;
+  state.openrouterModel = openrouterModel;
   state.customPrompt = customPrompt;
   state.availableGeminiModels = geminiKey === previousGeminiKey ? state.availableGeminiModels : [];
 
   localStorage.setItem('yt_api_key', apiKey);
   localStorage.setItem('yt_client_id', clientId);
-  localStorage.setItem('gemini_key', geminiKey);
-  localStorage.setItem('gemini_model', geminiModel);
+  localStorage.setItem('openrouter_key', openrouterKey);
+  localStorage.setItem('openrouter_model', openrouterModel);
   localStorage.setItem('custom_prompt', customPrompt);
 
   toggleModal(false);
@@ -1165,9 +1192,6 @@ function init() {
   handleOAuthCallback();
   render();
 
-  if (state.geminiKey) {
-    fetchAvailableGeminiModels();
-  }
 
   // If already logged in, fetch data
   if (state.accessToken) {
