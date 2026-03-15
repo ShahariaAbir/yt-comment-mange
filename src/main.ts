@@ -9,9 +9,9 @@ import './style.css';
 interface AppState {
   apiKey: string;
   clientId: string;
-  openrouterKey: string;
-  openrouterModel: string;
-  availableOpenrouterModels: string[];
+  groqKey: string;
+  groqModel: string;
+  availableGroqModels: string[];
   accessToken: string;
   channelId: string;
   channelTitle: string;
@@ -37,9 +37,9 @@ interface AppState {
 const state: AppState = {
   apiKey: localStorage.getItem('yt_api_key') || '',
   clientId: localStorage.getItem('yt_client_id') || '',
-  openrouterKey: localStorage.getItem('openrouter_key') || '',
-  openrouterModel: localStorage.getItem('openrouter_model') || 'auto',
-  availableOpenrouterModels: [],
+  groqKey: localStorage.getItem('groq_key') || localStorage.getItem('openrouter_key') || '',
+  groqModel: localStorage.getItem('groq_model') || 'openai/gpt-oss-20b',
+  availableGroqModels: [],
   accessToken: localStorage.getItem('yt_access_token') || '',
   channelId: localStorage.getItem('yt_channel_id') || '',
   channelTitle: localStorage.getItem('yt_channel_title') || '',
@@ -62,11 +62,10 @@ const state: AppState = {
   isSettingsModalOpen: false,
 };
 
-const OPENROUTER_FREE_MODEL_PREFERENCES = [
-  'qwen/qwen3-next-80b-a3b-instruct:free',
-  'mistralai/mistral-7b-instruct:free',
-  'google/gemma-2-9b-it:free',
-  'qwen/qwen-2.5-7b-instruct:free',
+const GROQ_MODEL_PREFERENCES = [
+  'openai/gpt-oss-20b',
+  'llama-3.3-70b-versatile',
+  'llama-3.1-8b-instant',
 ];
 
 // =========================================
@@ -267,28 +266,28 @@ async function postReply(commentId: string, text: string) {
 }
 
 // =========================================
-// OpenRouter AI
+// Groq AI
 // =========================================
-function getOpenrouterModels(): string[] {
-  if (state.availableOpenrouterModels.length > 0) {
-    return state.availableOpenrouterModels;
+function getGroqModels(): string[] {
+  if (state.availableGroqModels.length > 0) {
+    return state.availableGroqModels;
   }
-  return OPENROUTER_FREE_MODEL_PREFERENCES;
+  return GROQ_MODEL_PREFERENCES;
 }
 
-function resolveOpenrouterModel(): string {
-  const models = getOpenrouterModels();
+function resolveGroqModel(): string {
+  const models = getGroqModels();
 
-  if (state.openrouterModel !== 'auto') {
-    return state.openrouterModel;
+  if (state.groqModel) {
+    return state.groqModel;
   }
 
-  return models[0] || OPENROUTER_FREE_MODEL_PREFERENCES[0];
+  return models[0] || GROQ_MODEL_PREFERENCES[0];
 }
 
 async function generateReply(commentText: string, videoTitle?: string): Promise<string> {
-  if (!state.openrouterKey) {
-    showToast('Please set your OpenRouter API key in Settings', 'warning');
+  if (!state.groqKey) {
+    showToast('Please set your Groq API key in Settings', 'warning');
     return '';
   }
 
@@ -302,7 +301,7 @@ async function generateReply(commentText: string, videoTitle?: string): Promise<
   const tone = toneDescriptions[state.replyTone] || toneDescriptions.friendly;
   const customInstructions = state.customPrompt ? `
 Additional instructions: ${state.customPrompt}` : '';
-  const selectedModel = resolveOpenrouterModel();
+  const selectedModel = resolveGroqModel();
 
   const prompt = `You are a YouTuber replying to a comment on your video${videoTitle ? ` titled "${videoTitle}"` : ''}.
 Write a ${tone} reply to this YouTube comment. Keep it concise (1-3 sentences). Be genuine and engaging. Do not use hashtags. Reply as if you are the creator.${customInstructions}
@@ -310,13 +309,11 @@ Write a ${tone} reply to this YouTube comment. Keep it concise (1-3 sentences). 
 Comment: "${commentText}"`;
 
   try {
-    const res = await fetch('https://openrouter.ai/api/v1/chat/completions', {
+    const res = await fetch('https://api.groq.com/openai/v1/chat/completions', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'Authorization': `Bearer ${state.openrouterKey}`,
-        'HTTP-Referer': window.location.origin,
-        'X-Title': 'YT Comment AI Manager',
+        'Authorization': `Bearer ${state.groqKey}`,
       },
       body: JSON.stringify({
         model: selectedModel,
@@ -331,15 +328,15 @@ Comment: "${commentText}"`;
 
     if (!res.ok) {
       const errData = await res.json().catch(() => ({}));
-      throw new Error(errData.error?.message || `OpenRouter API error ${res.status}`);
+      throw new Error(errData.error?.message || `Groq API error ${res.status}`);
     }
 
     const data = await res.json();
     const reply = data.choices?.[0]?.message?.content?.trim() || '';
-    if (!reply) throw new Error('No reply returned from OpenRouter model');
+    if (!reply) throw new Error('No reply returned from Groq model');
     return reply;
   } catch (e: any) {
-    showToast('OpenRouter AI error: ' + e.message, 'error');
+    showToast('Groq AI error: ' + e.message, 'error');
     return '';
   }
 }
@@ -537,7 +534,7 @@ function renderWelcome(hasKeys: boolean): string {
         <div class="welcome-step">
           <div class="step-number">1</div>
           <h3>Add API Keys</h3>
-          <p>Set up YouTube + OpenRouter API keys in Settings</p>
+          <p>Set up YouTube + Groq API keys in Settings</p>
         </div>
         <div class="welcome-step">
           <div class="step-number">2</div>
@@ -818,24 +815,23 @@ function renderSettingsModal(): string {
             <div class="form-hint">From Google Cloud Console → Credentials → OAuth 2.0 Client IDs</div>
           </div>
           <div class="form-group">
-            <label for="input-openrouter-key">OpenRouter API Key</label>
-            <input type="password" id="input-openrouter-key" value="${escHtml(state.openrouterKey)}" placeholder="sk-or-v1-..." />
-            <div class="form-hint">From <a href="https://openrouter.ai/keys" target="_blank">OpenRouter</a> — use free models</div>
+            <label for="input-groq-key">Groq API Key</label>
+            <input type="password" id="input-groq-key" value="${escHtml(state.groqKey)}" placeholder="gsk_..." />
+            <div class="form-hint">From <a href="https://console.groq.com/keys" target="_blank">Groq Console</a></div>
           </div>
           <div class="form-group">
-            <label for="input-openrouter-model">OpenRouter Model</label>
-            <select id="input-openrouter-model">
-              <option value="auto" ${state.openrouterModel === 'auto' ? 'selected' : ''}>Auto (recommended free model)</option>
-              ${getOpenrouterModels().map(model => `<option value="${escHtml(model)}" ${state.openrouterModel === model ? 'selected' : ''}>${escHtml(model)}</option>`).join('')}
+            <label for="input-groq-model">Groq Model</label>
+            <select id="input-groq-model">
+              ${getGroqModels().map(model => `<option value="${escHtml(model)}" ${state.groqModel === model ? 'selected' : ''}>${escHtml(model)}</option>`).join('')}
             </select>
             <div class="form-hint">
-              Uses OpenRouter free models. Auto picks a free default model.
+              Select the Groq model used for AI replies.
             </div>
           </div>
           <div class="form-group">
             <label for="input-custom-prompt">Custom Prompt (Optional)</label>
             <textarea id="input-custom-prompt" rows="3" placeholder="e.g., Always mention my channel name, include a call to action...">${escHtml(state.customPrompt)}</textarea>
-            <div class="form-hint">Additional instructions for OpenRouter when generating replies</div>
+            <div class="form-hint">Additional instructions for Groq when generating replies</div>
           </div>
         </div>
         <div class="modal-footer">
@@ -1097,20 +1093,20 @@ function toggleModal(show: boolean) {
 function saveSettings() {
   const apiKey = (document.getElementById('input-api-key') as HTMLInputElement)?.value.trim() || '';
   const clientId = (document.getElementById('input-client-id') as HTMLInputElement)?.value.trim() || '';
-  const openrouterKey = (document.getElementById('input-openrouter-key') as HTMLInputElement)?.value.trim() || '';
-  const openrouterModel = (document.getElementById('input-openrouter-model') as HTMLSelectElement)?.value || 'auto';
+  const groqKey = (document.getElementById('input-groq-key') as HTMLInputElement)?.value.trim() || '';
+  const groqModel = (document.getElementById('input-groq-model') as HTMLSelectElement)?.value || GROQ_MODEL_PREFERENCES[0];
   const customPrompt = (document.getElementById('input-custom-prompt') as HTMLTextAreaElement)?.value.trim() || '';
 
   state.apiKey = apiKey;
   state.clientId = clientId;
-  state.openrouterKey = openrouterKey;
-  state.openrouterModel = openrouterModel;
+  state.groqKey = groqKey;
+  state.groqModel = groqModel;
   state.customPrompt = customPrompt;
 
   localStorage.setItem('yt_api_key', apiKey);
   localStorage.setItem('yt_client_id', clientId);
-  localStorage.setItem('openrouter_key', openrouterKey);
-  localStorage.setItem('openrouter_model', openrouterModel);
+  localStorage.setItem('groq_key', groqKey);
+  localStorage.setItem('groq_model', groqModel);
   localStorage.setItem('custom_prompt', customPrompt);
 
   toggleModal(false);

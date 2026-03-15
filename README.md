@@ -1,20 +1,20 @@
 # 🚀 YouTube Comment AI Manager
 
-A premium web application for YouTubers to manage comments and auto-reply using OpenRouter AI (free models).
+A premium web application for YouTubers to manage comments and auto-reply using Groq AI.
 
 ## ✨ Features
 
 - **OAuth 2.0 Integration**: Securely connect your YouTube account.
 - **Smart Filters**: Filter by unreplied comments, questions, or keyword search.
-- **AI-Powered Replies**: Generate personalized, context-aware replies using OpenRouter AI (free models).
-- **Smart OpenRouter Model Selection**: Uses free OpenRouter models by default and lets you choose a free model in Settings.
+- **AI-Powered Replies**: Generate personalized, context-aware replies using Groq AI.
+- **Groq Model Selection**: Choose the Groq model used to generate replies in Settings.
 - **Tone Control**: Choose between Friendly, Professional, Casual, or Funny tones.
 - **Batch Processing**: Reply to multiple comments in one click.
 - **Real-time Stats**: Track your engagement metrics.
 
 ---
 
-## 🛠️ Setup Instructions (Google Cloud & Gemini)
+## 🛠️ Setup Instructions (Google Cloud & Groq)
 
 ### 1. Set Up Google Cloud (YouTube API)
 1. Go to [Google Cloud Console](https://console.cloud.google.com/).
@@ -36,9 +36,9 @@ A premium web application for YouTubers to manage comments and auto-reply using 
      - `https://btcom-maneger.vercel.app`
    - Click Create and **Copy the Client ID**.
 
-### 2. Set Up OpenRouter API
-1. Go to [OpenRouter](https://openrouter.ai/).
-2. Create an account and open **Keys**.
+### 2. Set Up Groq API
+1. Go to [Groq Console](https://console.groq.com/).
+2. Open **API Keys**.
 3. Create a new API key (Copy this)
 
 ### 3. Running the App
@@ -46,7 +46,7 @@ A premium web application for YouTubers to manage comments and auto-reply using 
 2. Run the app: `npm run dev`
 3. Open `http://localhost:5173` (local) or `https://btcom-maneger.vercel.app` (production) in your browser.
 4. Click the **⚙️ Settings** icon in the app and paste your keys.
-5. (Optional) In Settings, keep **OpenRouter Model** on **Auto** to use a free model.
+5. (Optional) In Settings, pick the Groq model you want to use.
 6. Click **Connect YouTube Account** to start!
 
 ---
