@@ -32,6 +32,7 @@ interface AppState {
   generatingReplies: Set<string>;
   replyDrafts: Map<string, string>;
   openReplyAreas: Set<string>;
+  isSettingsModalOpen: boolean;
 }
 
 const state: AppState = {
@@ -60,6 +61,7 @@ const state: AppState = {
   generatingReplies: new Set(),
   replyDrafts: new Map(),
   openReplyAreas: new Set(),
+  isSettingsModalOpen: false,
 };
 
 const GEMINI_FREE_MODEL_PREFERENCES = [
@@ -591,8 +593,25 @@ function renderMainLayout(): string {
     <div class="main-content">
       ${renderSidebar()}
       <div class="content-area">
+        ${renderMobileVideoSelector()}
         ${state.selectedVideoId ? renderCommentsPanel() : renderSelectVideoPrompt()}
       </div>
+    </div>
+  `;
+}
+
+function renderMobileVideoSelector(): string {
+  return `
+    <div class="mobile-video-selector">
+      <label for="mobile-video-select">📹 Select Video</label>
+      <select id="mobile-video-select" ${state.isLoadingVideos ? 'disabled' : ''}>
+        <option value="">Choose a video</option>
+        ${state.videos.map(v => {
+          const videoId = v.id?.videoId || '';
+          const title = escHtml(v.snippet?.title || 'Untitled');
+          return `<option value="${videoId}" ${state.selectedVideoId === videoId ? 'selected' : ''}>${title}</option>`;
+        }).join('')}
+      </select>
     </div>
   `;
 }
@@ -808,7 +827,7 @@ function renderCommentCard(comment: any): string {
 
 function renderSettingsModal(): string {
   return `
-    <div class="modal-overlay" id="settings-modal">
+    <div class="modal-overlay ${state.isSettingsModalOpen ? 'visible' : ''}" id="settings-modal">
       <div class="modal">
         <div class="modal-header">
           <h2>⚙️ Settings</h2>
@@ -879,16 +898,24 @@ function attachEvents() {
   // Settings
   document.getElementById('btn-settings')?.addEventListener('click', async () => {
     toggleModal(true);
+    render();
     await fetchAvailableGeminiModels(true);
     render();
   });
   document.getElementById('btn-settings-welcome')?.addEventListener('click', async () => {
     toggleModal(true);
+    render();
     await fetchAvailableGeminiModels(true);
     render();
   });
-  document.getElementById('btn-close-modal')?.addEventListener('click', () => toggleModal(false));
-  document.getElementById('btn-cancel-settings')?.addEventListener('click', () => toggleModal(false));
+  document.getElementById('btn-close-modal')?.addEventListener('click', () => {
+    toggleModal(false);
+    render();
+  });
+  document.getElementById('btn-cancel-settings')?.addEventListener('click', () => {
+    toggleModal(false);
+    render();
+  });
   document.getElementById('btn-save-settings')?.addEventListener('click', saveSettings);
 
   // Connect
@@ -933,6 +960,19 @@ function attachEvents() {
         fetchComments(videoId);
       }
     });
+  });
+
+  document.getElementById('mobile-video-select')?.addEventListener('change', (e) => {
+    const videoId = (e.target as HTMLSelectElement).value || '';
+    if (videoId && videoId !== state.selectedVideoId) {
+      state.selectedVideoId = videoId;
+      state.comments = [];
+      state.selectedComments.clear();
+      state.openReplyAreas.clear();
+      state.replyDrafts.clear();
+      render();
+      fetchComments(videoId);
+    }
   });
 
   // Filter pills
@@ -1083,19 +1123,13 @@ function attachEvents() {
   document.getElementById('settings-modal')?.addEventListener('click', (e) => {
     if ((e.target as HTMLElement).id === 'settings-modal') {
       toggleModal(false);
+      render();
     }
   });
 }
 
 function toggleModal(show: boolean) {
-  const modal = document.getElementById('settings-modal');
-  if (modal) {
-    if (show) {
-      modal.classList.add('visible');
-    } else {
-      modal.classList.remove('visible');
-    }
-  }
+  state.isSettingsModalOpen = show;
 }
 
 function saveSettings() {
