@@ -7,6 +7,7 @@ A premium web application for YouTubers to manage comments and auto-reply using 
 - **OAuth 2.0 Integration**: Securely connect your YouTube account.
 - **Smart Filters**: Filter by unreplied comments, questions, or keyword search.
 - **AI-Powered Replies**: Generate personalized, context-aware replies using Google Gemini AI.
+- **Smart Gemini Model Selection**: Automatically uses available free Gemini models and lets you choose a model in Settings.
 - **Tone Control**: Choose between Friendly, Professional, Casual, or Funny tones.
 - **Batch Processing**: Reply to multiple comments in one click.
 - **Real-time Stats**: Track your engagement metrics.
@@ -45,7 +46,8 @@ A premium web application for YouTubers to manage comments and auto-reply using 
 2. Run the app: `npm run dev`
 3. Open `http://localhost:5173` (local) or `https://btcom-maneger.vercel.app` (production) in your browser.
 4. Click the **⚙️ Settings** icon in the app and paste your keys.
-5. Click **Connect YouTube Account** to start!
+5. (Optional) In Settings, keep **Gemini Model** on **Auto** to always use an available free model.
+6. Click **Connect YouTube Account** to start!
 
 ---
 
