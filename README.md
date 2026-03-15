@@ -56,3 +56,10 @@ A premium web application for YouTubers to manage comments and auto-reply using 
 - **Access Blocked**: If you see a "Google hasn't verified this app" screen, click **Advanced** then **Go to [App Name] (unsafe)**. This is normal for apps in development.
 - **Scopes**: Ensure you added your email to the **Test Users** in the OAuth Consent Screen.
 - **Quota**: The YouTube Data API has a free daily limit. If you have thousands of comments, you may hit the limit.
+
+
+## 🚀 Deployment
+
+- **Node version:** use Node `20.19+` (Vite 8 requirement).
+- **Vercel:** this repo includes `vercel.json` configured for Vite (`npm run build`, output `dist`).
+- If deployment failed before, set your project Node version to `20.x` in the hosting dashboard and redeploy.

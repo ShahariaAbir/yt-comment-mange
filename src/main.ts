@@ -888,16 +888,6 @@ function renderSettingsModal(): string {
             </div>
           </div>
           <div class="form-group">
-            <label for="input-gemini-model">Gemini Model</label>
-            <select id="input-gemini-model">
-              <option value="auto" ${state.geminiModel === 'auto' ? 'selected' : ''}>Auto (recommended free model)</option>
-              ${state.availableGeminiModels.map(model => `<option value="${escHtml(model)}" ${state.geminiModel === model ? 'selected' : ''}>${escHtml(model)}</option>`).join('')}
-            </select>
-            <div class="form-hint">
-              Uses free Gemini models available to your API key.${state.isLoadingGeminiModels ? ' Loading models...' : ''}
-            </div>
-          </div>
-          <div class="form-group">
             <label for="input-custom-prompt">Custom Prompt (Optional)</label>
             <textarea id="input-custom-prompt" rows="3" placeholder="e.g., Always mention my channel name, include a call to action...">${escHtml(state.customPrompt)}</textarea>
             <div class="form-hint">Additional instructions for OpenRouter when generating replies</div>
